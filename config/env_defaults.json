@@ -1,0 +1,20 @@
+{
+  "_description": "Default environment variables for web projects — used by infrastructure_designer.py and integrator.py",
+  "env_defaults": {
+    "PORT": "3000",
+    "DB_HOST": "localhost",
+    "DB_PORT": "3306",
+    "DB_USER": "root",
+    "DB_PASSWORD": "your_db_password",
+    "DB_NAME": "testdb",
+    "JWT_SECRET": "your_jwt_secret",
+    "JWT_REFRESH_SECRET": "your_jwt_refresh_secret",
+    "JWT_EXPIRES_IN": "7d",
+    "ENCRYPTION_KEY": "your_encryption_key_32chars",
+    "REDIS_URL": "redis://localhost:6379/0",
+    "LOG_LEVEL": "info",
+    "CORS_ORIGIN": "*",
+    "NODE_ENV": "development"
+  },
+  "web_env_prefixes": ["PORT", "DB_", "JWT_", "ENCRYPTION_KEY", "LOG_LEVEL", "REDIS_URL", "CORS_ORIGIN", "NODE_ENV"]
+}

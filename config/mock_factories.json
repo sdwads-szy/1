@@ -1,0 +1,25 @@
+{
+  "_description": "Mock factory strategies for third-party npm packages — used by test_writer.py _mock_factory()",
+  "_note": "Each entry maps a package name to its jest.mock() factory function body (JavaScript). Use {pkg} as package name placeholder.",
+  "factories": {
+    "cors": "() => (req, res, next) => next()",
+    "helmet": "() => (req, res, next) => next()",
+    "morgan": "() => (req, res, next) => next()",
+    "winston": "{ createLogger: jest.fn(() => ({ info: jest.fn(), error: jest.fn(), warn: jest.fn(), debug: jest.fn() })), format: { combine: jest.fn(), timestamp: jest.fn(), errors: jest.fn(), colorize: jest.fn(), json: jest.fn(), printf: jest.fn() }, transports: { Console: jest.fn(), File: jest.fn() } }",
+    "express": "jest.fn(() => ({ use: jest.fn(), get: jest.fn(), post: jest.fn(), put: jest.fn(), delete: jest.fn(), listen: jest.fn() }))",
+    "bcryptjs": "{ hash: jest.fn(), compare: jest.fn() }",
+    "bcrypt": "{ hash: jest.fn(), compare: jest.fn() }",
+    "jsonwebtoken": "{ sign: jest.fn(), verify: jest.fn() }",
+    "dotenv": "{ config: jest.fn() }",
+    "mysql2": "{ createConnection: jest.fn(), createPool: jest.fn() }",
+    "mysql2/promise": "{ createConnection: jest.fn(), createPool: jest.fn() }",
+    "axios": "{ get: jest.fn(), post: jest.fn(), put: jest.fn(), delete: jest.fn() }",
+    "redis": "{ createClient: jest.fn() }",
+    "ioredis": "{ createClient: jest.fn() }",
+    "node-fetch": "jest.fn()",
+    "multer": "{ single: jest.fn(), array: jest.fn() }",
+    "express-validator": "{ body: jest.fn(), param: jest.fn(), query: jest.fn(), validationResult: jest.fn() }"
+  },
+  "middleware_packages": ["cors", "helmet", "morgan"],
+  "business_required_packages": ["express", "dotenv", "cors", "helmet", "morgan", "winston"]
+}

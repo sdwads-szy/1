@@ -1,0 +1,12 @@
+{
+  "_description": "Auto-fix patterns for infrastructure issues — used by scheduler.py _auto_fix_infra()",
+  "fixes": {
+    "npm_packages": ["@vue/vue3-jest", "jest-environment-jsdom", "babel-jest", "@babel/preset-env"],
+    "babel_config": "module.exports = {\n  presets: [\n    ['@babel/preset-env', { targets: { node: 'current' }, modules: 'commonjs' }],\n  ],\n};\n",
+    "transform_ignore_pattern": "node_modules/(?!(element-plus|@element-plus|pinia|@vue|vue|vue-router|@vueuse|axios)/)",
+    "jest_transform": {
+      "^.+\\.vue$": "@vue/vue3-jest",
+      "^.+\\.js$": "babel-jest"
+    }
+  }
+}

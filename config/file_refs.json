@@ -1,0 +1,14 @@
+{
+  "_description": "File reference dependency map — used by architect.py _post_process_architect_output §7 to auto-inject cross-task dependencies",
+  "_format": "src_file → [ref_files...] (files that src_file depends on)",
+  "known_refs": {
+    "middleware/auth.js": ["utils/response.js"],
+    "middleware/permission.js": ["utils/response.js"],
+    "middleware/errorHandler.js": ["utils/response.js", "config/logger.js"],
+    "app.js": ["config/db.js"],
+    "scripts/init-db.js": ["config/db.js", "utils/response.js"],
+    "scripts/seed-users.js": ["config/db.js", "utils/encryption.js"],
+    "src/stores/user.js": ["src/utils/request.js"],
+    "src/stores/cart.js": ["src/utils/request.js"]
+  }
+}
