@@ -64,3 +64,5 @@ Thumbs.db
 
 # ── Claude ──
 .claude/
+doc/PROJECT_SUMMARY.md
+doc/STARCHAIN_MALL.md
