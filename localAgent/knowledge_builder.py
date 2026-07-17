@@ -39,6 +39,7 @@ model_client = OpenAIChatCompletionClient(
 SKILL_PATH = {
     "refine": parent_dir / "skill" / "rag" / "build" / "refine.md",
     "merge": parent_dir / "skill" / "rag" / "build" / "merge.md",
+    "generalize": parent_dir / "skill" / "rag" / "build" / "generalize.md",
 }
 
 

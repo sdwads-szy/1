@@ -57,14 +57,10 @@ async def retrieve_single_angle(
 
     rows = result.get("rows", []) if result["success"] else []
 
-    # 过滤已在前序角度中出现的记录
-    if exclude_ids:
-        rows = [r for r in rows if r.get("id") not in exclude_ids]
-        rows = rows[:top_k]
+    formatted = _format_retrieval_rows(rows, top_k, exclude_ids)
 
-    # 降级：如果带合约过滤无结果，移除合约过滤重试（保留标签过滤）
-    if fallback and len(rows) == 0 and filter_expr != "1=1":
-        # 构建仅含标签过滤的表达式
+    # ── 回退1: 移除合约过滤，保留标签过滤 ──
+    if fallback and len(formatted) == 0 and filter_expr != "1=1":
         tag_conditions = []
         if query_obj.severity_filter:
             sev_list = ", ".join(f"'{s}'" for s in query_obj.severity_filter)
@@ -88,9 +84,30 @@ async def retrieve_single_angle(
         )
         if fallback_result["success"]:
             rows = fallback_result.get("rows", [])
-            if exclude_ids:
-                rows = [r for r in rows if r.get("id") not in exclude_ids]
-                rows = rows[:top_k]
+            formatted = _format_retrieval_rows(rows, top_k, exclude_ids)
+
+    # ── 回退2: 跨项目模式匹配 — 用 pattern_tags 语义泛化 ──
+    if fallback and len(formatted) == 0:
+        pattern_conditions = _build_pattern_tag_filter(query)
+        if pattern_conditions and pattern_conditions != "1=1":
+            pattern_result = await table_vector_search(
+                table=table,
+                query_vector=query_vector,
+                filter_expr=pattern_conditions,
+                limit=top_k + (len(exclude_ids) + 2 if exclude_ids else 0),
+                columns=["id", "do", "dont", "context", "severity", "category"]
+            )
+            if pattern_result["success"]:
+                rows = pattern_result.get("rows", [])
+                formatted = _format_retrieval_rows(rows, top_k, exclude_ids)
+
+    return formatted
+
+
+def _format_retrieval_rows(rows, top_k, exclude_ids=None):
+    if exclude_ids:
+        rows = [r for r in rows if r.get("id") not in exclude_ids]
+        rows = rows[:top_k]
 
     formatted = []
     for r in rows:
@@ -142,3 +159,24 @@ def format_retrieval_stats(final_results: List[Dict], angles: List[Dict]) -> Dic
         if angle_id in angle_counts:
             angle_counts[angle_id] += 1
     return {"total": len(final_results), "angles": angle_counts}
+
+
+def _build_pattern_tag_filter(query: str) -> str:
+    """从自然语言查询中提取 pattern_tags 过滤条件，用于跨项目经验匹配。
+
+    当合约级过滤无结果时，用语义模式标签做最后的回退检索。
+    """
+    from Tools.rag.build.tools import _PATTERN_KEYWORD_MAP
+    q = query.lower()
+    matched_tags = set()
+
+    for keyword, tag in _PATTERN_KEYWORD_MAP.items():
+        if keyword.lower() in q:
+            matched_tags.add(tag)
+
+    if not matched_tags:
+        return "1=1"
+
+    tag_list = list(matched_tags)[:8]
+    conditions = [f"array_contains(pattern_tags, '{t}')" for t in tag_list]
+    return " OR ".join(conditions)

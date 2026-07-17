@@ -206,6 +206,55 @@ async def run_build(user_query: str) -> dict:
         result["error"] = "净化后无数据"
         return result
 
+    # -------- Step 3.5: 泛化 — Python pattern_tags + LLM 语义泛化 --------
+    print_step("3.5", "经验泛化 — 提取跨项目通用模式标签")
+    from Tools.rag.build.tools import extract_pattern_tags
+    generalized_count = 0
+    for rec in refined_records:
+        # Python 规则驱动: 从 do/dont/context/category/fingerprint 提取通用标签
+        pattern_tags = extract_pattern_tags(rec)
+        rec["pattern_tags"] = pattern_tags
+        if pattern_tags:
+            generalized_count += 1
+
+    # LLM 深度泛化: 对 high severity 记录做语义层面的跨项目抽象
+    high_severity = [r for r in refined_records if r.get("severity") == "high"]
+    if high_severity:
+        try:
+            generalize_input = {"records": [{
+                "source_fingerprint": r.get("source_fingerprint", ""),
+                "do": r.get("do", ""),
+                "dont": r.get("dont", ""),
+                "context": r.get("context", ""),
+                "category": r.get("category", ""),
+                "severity": r.get("severity", "medium"),
+            } for r in high_severity[:5]]}  # 最多 5 条，控制 token
+            gen_result = await run_knowledge_builder("generalize", generalize_input)
+            if isinstance(gen_result, list):
+                for i, gen in enumerate(gen_result):
+                    if i < len(high_severity) and isinstance(gen, dict):
+                        # 合并泛化标签到原始记录
+                        cross_tags = gen.get("cross_project_tags", [])
+                        if cross_tags:
+                            existing = set(high_severity[i].get("pattern_tags", []))
+                            existing.update(cross_tags)
+                            high_severity[i]["pattern_tags"] = sorted(existing)
+                        # 保存泛化后的通用描述
+                        high_severity[i]["generalized_do"] = gen.get("pattern_do", "")
+                        high_severity[i]["generalized_dont"] = gen.get("pattern_dont", "")
+                        high_severity[i]["generalized_context"] = gen.get("pattern_context", "")
+            result["steps"]["3.5_generalize"] = {
+                "rule_based_tags": generalized_count,
+                "llm_generalized": len(high_severity[:5]) if gen_result and isinstance(gen_result, list) else 0,
+            }
+            print(f"  规则标签: {generalized_count} 条, LLM泛化: {len(high_severity[:5])} 条(high severity)")
+        except Exception as e:
+            result["steps"]["3.5_generalize"] = {"rule_based_tags": generalized_count, "llm_error": str(e)[:100]}
+            print(f"  规则标签: {generalized_count} 条, LLM泛化失败: {e}")
+    else:
+        result["steps"]["3.5_generalize"] = {"rule_based_tags": generalized_count}
+        print(f"  规则标签: {generalized_count} 条")
+
     # -------- Step 4: 去重与合并 --------
     print_step("4", "去重与语义合并")
     table = tools.create_table(force_recreate=False)
