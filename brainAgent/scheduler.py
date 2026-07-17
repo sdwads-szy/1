@@ -4430,8 +4430,8 @@ async def _score_and_store(task, test_result, workspace, task_id, attempt, log_d
         result = score_code(source_files=source_files, engineer_tasks=[task], test_tasks=None,
                            source_memory=src_mem, test_memory=test_mem, test_output=jest_output)
 
-        # 源码 >= 90 入库
-        if result.total >= 90:
+        # 源码 >= 70 (A级) 入库，积累代码参考库
+        if result.total >= 70:
             try:
                 from Tools.rag.code_retrieval.code_store import store_code
                 store_code(code_files=source_files, task_id=task_id, task_type=task.get("layer", "backend_proc"),
@@ -4440,12 +4440,12 @@ async def _score_and_store(task, test_result, workspace, task_id, attempt, log_d
             except Exception:
                 pass
 
-        # 测试代码 >= 90 入库
+        # 测试代码 >= 70 (A级) 入库
         if test_file_path and Path(test_file_path).exists():
             test_code = Path(test_file_path).read_text("utf-8")
             test_result_obj = score_test_code(test_content=test_code, task=task,
                                               test_output=jest_output, test_bans=test_mem)
-            if test_result_obj.total >= 90:
+            if test_result_obj.total >= 70:
                 try:
                     from Tools.rag.code_retrieval.code_store import store_test_code
                     store_test_code(code_files={Path(test_file_path).name: test_code}, task_id=task_id,

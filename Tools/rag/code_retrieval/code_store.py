@@ -105,10 +105,17 @@ def create_test_code_table() -> Optional[Any]:
 # ── 代码解析 (函数级分割) ──
 
 def extract_functions(code: str, file_path: str = "") -> List[Dict]:
-    """从源码文件提取各个导出函数，返回 [{function_name, code_snippet, search_text}]。"""
-    functions = []
+    """从源码文件提取各个导出函数，返回 [{function_name, code_snippet, search_text}]。
 
-    # 匹配: exports.fnName = async (params) => { ... }; 或 exports.fnName = async function(params) {...}
+    支持三种导出模式:
+      1. CJS exports.xxx:  exports.fnName = async (params) => { ... }
+      2. CJS module.exports:  module.exports = { fn1, fn2 }  → 回溯找 async function fn1
+      3. ESM export:  export async function fnName(params) { ... }
+    """
+    functions = []
+    extracted_names = set()
+
+    # ── 模式1: exports.fnName = ... ──
     for m in re.finditer(
         r'exports\.(\w+)\s*=\s*(?:async\s+)?(?:function\s*)?\(([^)]*)\)\s*(?:=>)?\s*\{',
         code
@@ -116,28 +123,71 @@ def extract_functions(code: str, file_path: str = "") -> List[Dict]:
         fname = m.group(1)
         params = m.group(2)
         start = m.start()
-        # 找到匹配的闭合 }
-        depth = 0
-        end = start
-        for i, ch in enumerate(code[start:], start):
-            if ch == '{':
-                depth += 1
-            elif ch == '}':
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
+        end = _find_matching_brace(code, start)
         if end > start:
             snippet = code[start:end]
-            search_text = _build_search_text(fname, params, snippet)
             functions.append({
-                "function_name": fname,
-                "code_snippet": snippet,
-                "file_path": file_path,
-                "search_text": search_text,
+                "function_name": fname, "code_snippet": snippet,
+                "file_path": file_path, "search_text": _build_search_text(fname, params, snippet),
             })
+            extracted_names.add(fname)
+
+    # ── 模式2: ESM export async function / export function ──
+    for m in re.finditer(
+        r'export\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)\s*\{',
+        code
+    ):
+        fname = m.group(1)
+        params = m.group(2)
+        start = m.start()
+        end = _find_matching_brace(code, start)
+        if end > start:
+            snippet = code[start:end]
+            functions.append({
+                "function_name": fname, "code_snippet": snippet,
+                "file_path": file_path, "search_text": _build_search_text(fname, params, snippet),
+            })
+            extracted_names.add(fname)
+
+    # ── 模式3: module.exports = { fn1, fn2 } → 回溯找对应函数定义 ──
+    mod_export = re.search(r'module\.exports\s*=\s*\{([^}]+)\}', code)
+    if mod_export:
+        exported_names = re.findall(r'\b(\w+)\b', mod_export.group(1))
+        for fname in exported_names:
+            if not fname or fname in extracted_names:
+                continue
+            # 回溯找: async function fnName(params) { ... } 或 function fnName(params) { ... }
+            func_def = re.search(
+                rf'(?:async\s+)?function\s+{re.escape(fname)}\s*\(([^)]*)\)\s*\{{',
+                code
+            )
+            if func_def:
+                params = func_def.group(1) if func_def.lastindex else ""
+                start = func_def.start()
+                end = _find_matching_brace(code, start)
+                if end > start:
+                    snippet = code[start:end]
+                    functions.append({
+                        "function_name": fname, "code_snippet": snippet,
+                        "file_path": file_path,
+                        "search_text": _build_search_text(fname, params, snippet),
+                    })
+                    extracted_names.add(fname)
 
     return functions
+
+
+def _find_matching_brace(code: str, start: int) -> int:
+    """从 start 位置的 { 开始，找到匹配的闭合 }。"""
+    depth = 0
+    for i, ch in enumerate(code[start:], start):
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return start
 
 
 def _build_search_text(fname: str, params: str, snippet: str) -> str:
