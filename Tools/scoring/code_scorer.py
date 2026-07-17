@@ -35,48 +35,38 @@ def score_code(
     test_output: Optional[Dict] = None,         # Jest --json 输出
 ) -> ScoreResult:
     """
-    五维评分:
-      测试通过率     30%  — 测试跑出来多少通过（最客观）
-      任务完成度     25%  — 工程师任务的要求实现了多少
-      测试覆盖度     20%  — 测试任务覆盖了多少场景+维度完备性
-      代码质量       15%  — 结构/安全/规范/禁止模式（多信号综合）
-      记忆修复率     10%  — 已知 ban 标记的问题是否已修复
+    三维评分:
+      测试通过率     50%  — 全过=满分，有失败=0。静态层无测试→跳过此维
+      代码规范       30%  — 文件存在/禁止模式/结构（能客观检查的）
+      记忆修复率     20%  — 已知 ban 是否已修复（最直接的质量信号）
     """
     result = ScoreResult()
     breakdown = {}
 
-    # 1. 测试通过率（30%）
+    # 1. 测试通过（50%）—— 全过=满分，有失败=0，未运行=跳过
     test_score, test_info = _score_test_pass(test_output)
-    breakdown["test_pass"] = test_score * 0.30
+    if test_output is not None:
+        breakdown["test_pass"] = test_score * 0.50
+    else:
+        breakdown["test_pass"] = 0
 
-    # 2. 任务完成度（25%）
-    task_score, task_info = _score_task_completion(source_files, engineer_tasks)
-    breakdown["task_done"] = task_score * 0.25
-
-    # 3. 测试覆盖度（20%）
-    cover_score, cover_info = _score_test_coverage(source_files, test_tasks or [])
-    breakdown["test_cover"] = cover_score * 0.20
-
-    # 4. 代码质量（15%）—— 多信号综合: 事务完整性/锁使用/错误处理/安全/正向信号/结构
+    # 2. 代码规范（30%）—— 文件存在 + 禁止模式 + 结构（硬编码能客观检查的）
     qual_score, qual_info = _score_code_quality(source_files, engineer_tasks)
-    breakdown["quality"] = qual_score * 0.15
+    breakdown["quality"] = qual_score * 0.30
 
-    # 5. 记忆修复率（10%）
+    # 3. 记忆修复率（20%）—— ban 修复情况
     mem_score, mem_info = _score_memory_fix(source_files, source_memory or [], test_memory or [])
-    breakdown["mem_fix"] = mem_score * 0.10
+    breakdown["mem_fix"] = mem_score * 0.20
 
-    # 权重加起来是 1.0，乘以 100 得到百分制
     result.total = round(sum(breakdown.values()) * 100, 1)
     result.breakdown = {k: round(v * 100, 1) for k, v in breakdown.items()}
     result.details = {
         "test_pass": test_info,
-        "task_done": task_info,
-        "test_cover": cover_info,
-        "mem_fix": mem_info,
         "quality": qual_info,
+        "mem_fix": mem_info,
     }
     result.level = _level(result.total)
-    result.summary = f"测试{test_score:.0%} 任务{task_score:.0%} 覆盖{cover_score:.0%} 修复{mem_score:.0%} 质量{qual_score:.0%}"
+    result.summary = f"测试{test_score:.0%} 规范{qual_score:.0%} 修复{mem_score:.0%}"
     return result
 
 
@@ -136,13 +126,17 @@ def score_test_code(
 # ═══════════════════════════════════════════════
 
 def _score_test_pass(test_output: Optional[Dict]) -> tuple:
+    """全过=1.0，有失败=0.0，未运行=None→上层跳过此维度。"""
     if not test_output:
         return 0.0, "无测试结果"
     total = test_output.get("numTotalTests", 0)
     passed = test_output.get("numPassedTests", 0)
+    failed = test_output.get("numFailedTests", 0)
     if total == 0:
-        return 0.0, "测试未运行 (total=0)"
-    return passed / total, f"{passed}/{total} passed"
+        return 0.0, "测试未运行"
+    if failed > 0:
+        return 0.0, f"失败 {failed}/{total}"
+    return 1.0, f"全部通过 {passed}/{total}"
 
 
 def _score_task_completion(source_files: Dict[str, str], tasks: List[Dict]) -> tuple:
@@ -507,15 +501,16 @@ def _score_code_quality(source_files: Dict[str, str], tasks: List[Dict]) -> tupl
 # ═══════════════════════════════════════════════
 
 def _level(score: float) -> str:
-    if score >= 90: return "S"
-    if score >= 80: return "A"
-    if score >= 65: return "B"
-    if score >= 50: return "C"
+    # 放宽门槛：任务完成+质量好就能 B，测试通过才能 A/S
+    if score >= 85: return "S"
+    if score >= 70: return "A"
+    if score >= 55: return "B"
+    if score >= 40: return "C"
     return "D"
 
 
 def format_score_report(result: ScoreResult) -> str:
-    labels = {"test_pass":"测试通过","task_done":"任务完成","test_cover":"测试覆盖","mem_fix":"记忆修复","quality":"代码质量"}
+    labels = {"test_pass":"测试通过","quality":"代码规范","mem_fix":"记忆修复"}
     lines = [f"综合评分: {result.total:.0f}/100 ({result.level})", ""]
     for k, v in result.breakdown.items():
         bar = "█" * int(v / 5) + "░" * (20 - int(v / 5))

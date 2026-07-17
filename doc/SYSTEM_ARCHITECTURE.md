@@ -1,1162 +1,1730 @@
-# Agent 多智能体代码生成系统 — 系统架构文档
-
-> **版本**: v1.0  
-> **日期**: 2026-06-29  
-> **项目路径**: `<project_root>`
+# Agent 多智能体代码生成系统 — 系统架构设计
 
 ---
 
-## 目录
+## 第一章：系统总览
 
-1. [系统概述](#1-系统概述)
-2. [技术栈](#2-技术栈)
-3. [总体架构](#3-总体架构)
-4. [主流水线（4 步）](#4-主流水线4-步)
-5. [目录结构](#5-目录结构)
-6. [模块详解](#6-模块详解)
-   - [6.1 agent/ — 核心 Agent 实现](#61-agent--核心-agent-实现)
-   - [6.2 brainAgent/ — 编排调度器](#62-brainagent--编排调度器)
-   - [6.3 localAgent/ — LLM 调用封装](#63-localagent--llm-调用封装)
-   - [6.4 utils/ — 共享工具](#64-utils--共享工具)
-   - [6.5 Tools/ — 可复用工具](#65-tools--可复用工具)
-   - [6.6 skill/ — Agent 技能文档](#66-skill--agent-技能文档)
-   - [6.7 config/ — 配置文件](#67-config--配置文件)
-7. [数据流](#7-数据流)
-8. [依赖图与分层架构](#8-依赖图与分层架构)
-9. [RAG 知识库子系统](#9-rag-知识库子系统)
-10. [测试验证子系统（ABCD 循环）](#10-测试验证子系统abcd-循环)
-11. [运行时数据与存储](#11-运行时数据与存储)
-12. [接口真理（Truth）系统](#12-接口真理truth系统)
-13. [评分系统](#13-评分系统)
-14. [外部依赖](#14-外部依赖)
-15. [关键设计模式](#15-关键设计模式)
-16. [错误处理与容错](#16-错误处理与容错)
+### 1.1 系统定位
 
----
+Agent 是一个**多智能体协作的全自动代码生成系统**。它接收一句话自然语言需求作为输入，通过五个阶段的智能体协作流水线，产出可运行的完整 Web 应用（Node.js + Express + MySQL + Vue 3），包括需求文档、架构契约、前后端源码、数据库 DDL、测试代码。
 
-## 1. 系统概述
+### 1.2 核心设计理念
 
-本系统是一个**多智能体 AI 代码生成引擎**，能够从一句自然语言需求描述，全自动生成一套完整的 Web 应用（Node.js + Express + MySQL 后端，Vue 3 + Vite + Pinia 前端），并包含自动化测试、修复和多轮迭代优化。
+| 原则 | 说明 | 实现方式 |
+|------|------|---------|
+| **契约驱动** | 所有下游工作基于结构化数据，而非自然语言 | 7 类 JSON 契约贯穿全流程 |
+| **分层解耦** | 每个阶段有明确的输入/输出边界 | 5 阶段流水线 + 文件落盘 |
+| **真理传递** | Agent 间通过"真理文件"共享已验证的接口信息 | `exposed_to_upper` / `exposed_to_peers` |
+| **Ban 经验积累** | 失败经验跨 attempt 持久化，避免重复犯错 | Memory 目录持久化 |
+| **缓存优先** | System prompt 固定排序，最大化 LLM 缓存命中 | prompt_builder 5 层固定顺序 |
+| **并发执行** | 无依赖任务并行，有依赖任务串行 | DAG 拓扑排序 + asyncio.gather |
+| **可恢复** | 任何阶段失败后可从中断点继续 | `--resume` 模式 + 状态持久化 |
 
-### 核心能力
+### 1.3 技术栈
 
-- **需求分析**：多角色（客户、用户、产品经理、架构师、安全专家等）多轮讨论，输出完整 PRD
-- **架构设计**：从 PRD 自动生成 7 类契约（Scenario/Model/Logic/API/DB-API/Navigation/Auth）+ 5 类开发任务（Infra/DB/Backend/Frontend/Integration）
-- **代码生成**：按严格类型分层并发执行，LLM 缓存友好，支持依赖剪枝
-- **测试验证**：13 层 ABCD 循环（A写测试 → B运行诊断 → C修复源码 → D验证修复），多轮自动修复
-- **知识库（RAG）**：从测试/源码失败的记忆中提炼经验，向量化存储，检索辅助后续任务
-- **代码评分**：5 维度自动评分（S/A/B/C/D），高分代码自动入库
-
-### 目标产物
-
-```
-work/project/
-  ├── app.js                    # Express 入口
-  ├── package.json              # npm 配置
-  ├── .env                      # 环境变量
-  ├── middleware/               # 认证/权限/错误处理
-  ├── config/db.js              # MySQL 连接池
-  ├── routes/                   # Express 路由
-  ├── services/                 # 业务逻辑层
-  ├── database/schema_*.sql     # DDL 脚本
-  ├── src/                      # Vue 3 前端
-  │   ├── pages/                # 页面组件
-  │   ├── components/           # 通用组件
-  │   ├── stores/               # Pinia 状态管理
-  │   ├── api/                  # Axios API 封装
-  │   └── router/index.js       # Vue Router
-  ├── scripts/init-db.js        # 数据库初始化
-  └── test/                     # Jest/Vitest 测试
-      ├── unit/
-      ├── business/
-      ├── joint/
-      └── special/
-```
+| 层次 | 框架自身 | 生成产物 |
+|------|---------|---------|
+| 语言 | Python 3.11+ | JavaScript (Node.js) |
+| Agent 框架 | picoagents | — |
+| LLM | DeepSeek (OpenAI 兼容 API) | — |
+| 后端运行时 | — | Node.js + Express |
+| 数据库 | LanceDB (向量) + MySQL (产物) | MySQL + mysql2 |
+| 前端 | — | Vue 3 + Vite + Pinia + Element Plus |
+| 缓存 | Redis (可选) | — |
+| 向量模型 | sentence-transformers | — |
+| 测试 | — | Jest + supertest + k6 |
 
 ---
 
-## 2. 技术栈
+## 第二章：整体架构
 
-| 层级 | 技术 | 说明 |
-|------|------|------|
-| **LLM** | DeepSeek V4 Pro (via OpenAI-compatible API) | 主要推理模型 |
-| **Agent 框架** | `picoagents` | Agent 创建、流处理、工具调度 |
-| **后端目标** | Node.js + Express + MySQL | 生成代码的运行环境 |
-| **前端目标** | Vue 3 + Vite + Pinia + Axios | 生成代码的运行环境 |
-| **测试** | Jest / Vitest | 自动化测试框架 |
-| **向量数据库** | LanceDB | RAG 知识库存储 |
-| **嵌入模型** | Qwen3-Embedding-4B | 文本向量化 |
-| **重排序** | Qwen3-Reranker-4B | 检索结果重排 |
-| **缓存** | Redis (可选，降级为文件) | 测试快照缓存、RAG 查询缓存 |
-| **本地模型** | Qwopus3.5-4B-coder (llama-server) | 可选的本地推理 |
-| **语言** | Python 3 | 系统实现语言 |
-
----
-
-## 3. 总体架构
+### 2.1 分层架构
 
 ```
-                          ┌─────────────────────────────────────┐
-                          │         用户 (一句话需求)             │
-                          └─────────────────┬───────────────────┘
-                                            │
-                          ┌─────────────────▼───────────────────┐
-                          │      brainAgent/basic.py             │
-                          │         (统一入口)                    │
-                          └─────────────────┬───────────────────┘
-                                            │
-          ┌─────────────────────────────────┼─────────────────────────────────┐
-          │                                 │                                 │
-  ┌───────▼────────┐  ┌────────────▼──────┐  ┌───────────▼────────┐  ┌───────▼────────┐
-  │ Step 1          │  │ Step 2            │  │ Step 3              │  │ Step 4          │
-  │ 需求分析         │  │ 架构设计           │  │ 代码生成             │  │ 测试验证         │
-  │ orchestrator.py │  │ architect.py      │  │ engineer.py         │  │ scheduler.py    │
-  │ → PRD 报告       │  │ → task.json       │  │ → 源代码             │  │ → 测试通过/修复  │
-  └───────┬────────┘  └────────────┬──────┘  └───────────┬────────┘  └───────┬────────┘
-          │                        │                     │                    │
-          │              ┌─────────┴─────────┐           │                    │
-          │              │ 7 类契约           │           │                    │
-          │              │ 5 类任务           │           │                    │
-          │              └───────────────────┘           │                    │
-          │                                              │                    │
-          │                        ┌─────────────────────┴────────┐           │
-          │                        │  RAG 检索 (search_rag)        │◄──────────┘
-          │                        │  代码检索 (search_code)       │
-          │                        │  记忆系统 (Memory/)          │
-          │                        └──────────────────────────────┘
-          │
-          └──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        用户界面层                                  │
+│                 brainAgent/basic.py (CLI 入口)                     │
+│                   python brainAgent/basic.py "需求"                │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+┌──────────────────────────────────────────────────────────────────┐
+│                       编排调度层 (brainAgent/)                      │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
+│  │ orchestrator │  │  engineer    │  │     scheduler         │   │
+│  │ 需求分析编排  │  │ 代码生成调度  │  │  ABCD 测试调度        │   │
+│  │ PM+10角色     │  │ DAG分层+并发 │  │  双层屏障+静态检查     │   │
+│  └──────────────┘  └──────────────┘  └──────────────────────┘   │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────────────────────────────┐     │
+│  │ knowledge_   │  │        retrieval_scheduler            │     │
+│  │ builder      │  │        检索调度 (RAG 查询路由)         │     │
+│  └──────────────┘  └──────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+┌──────────────────────────────────────────────────────────────────┐
+│                      核心 Agent 层 (agent/)                        │
+│                                                                  │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌───────────┐ │
+│  │ product_   │  │ architect  │  │ base_      │  │ integrator│ │
+│  │ manager    │  │ 架构师      │  │ designer   │  │ 集成工程师 │ │
+│  │ PM+10角色   │  │ 5步流水线   │  │ 4类工程师基类│  │ 全链路集成 │ │
+│  └────────────┘  └────────────┘  └────────────┘  └───────────┘ │
+│                                                                  │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌───────────┐ │
+│  │ prompt_    │  │ test_      │  │ test_       │  │ test_     │ │
+│  │ builder    │  │ architect  │  │ writer      │  │ runner    │ │
+│  │ 提示词组装  │  │ 测试架构师  │  │ A步:测试编写 │  │ B/D步     │ │
+│  └────────────┘  └────────────┘  └────────────┘  └───────────┘ │
+│                                                                  │
+│  ┌────────────┐                                                  │
+│  │ source_    │  C步: 源码修复                                    │
+│  │ fixer      │                                                  │
+│  └────────────┘                                                  │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+┌──────────────────────────────────────────────────────────────────┐
+│                      技能系统层 (skill/)                           │
+│                                                                  │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌───────────┐ │
+│  │ design/    │  │ engineer/  │  │ test/       │  │ code/     │ │
+│  │ 11 文件    │  │ 12 文件    │  │ 100+ 文件   │  │ 3 文件    │ │
+│  │ 需求角色    │  │ 架构+代码   │  │ 测试全线     │  │ 质量规范   │ │
+│  └────────────┘  └────────────┘  └────────────┘  └───────────┘ │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+┌──────────────────────────────────────────────────────────────────┐
+│                      工具系统层 (Tools/)                           │
+│                                                                  │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌───────────┐ │
+│  │ coding/    │  │ testing/   │  │ memory/    │  │ rag/      │ │
+│  │ CRUD+语法  │  │ Jest+k6+npm│  │ 记忆+Ban   │  │ 检索+构建  │ │
+│  └────────────┘  └────────────┘  └────────────┘  └───────────┘ │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+┌──────────────────────────────────────────────────────────────────┐
+│                      基础设施层 (utils/ + localAgent/)              │
+│                                                                  │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌───────────┐ │
+│  │ model_     │  │ token_     │  │ dependency_│  │ local     │ │
+│  │ client     │  │ tracker    │  │ graph      │  │ Agent     │ │
+│  │ LLM 客户端  │  │ Token 追踪  │  │ DAG 分层    │  │ 本地模型   │ │
+│  └────────────┘  └────────────┘  └────────────┘  └───────────┘ │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │              localAgent 子系统                              │ │
+│  │  ┌─────────────────────┐  ┌─────────────────────────────┐  │ │
+│  │  │ knowledge_builder   │  │ retrieval_agent             │  │ │
+│  │  │ RAG 知识构建 Agent   │  │ RAG 检索 Agent              │  │ │
+│  │  │ refine + merge      │  │ angle_analysis + deliver    │  │ │
+│  │  └─────────────────────┘  └─────────────────────────────┘  │ │
+│  └────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## 4. 主流水线（4 步）
-
-### Step 1: 需求分析
-
-**入口**: `brainAgent/orchestrator.py → run_demand_analysis()`  
-**核心 Agent**: `agent/product_manager.py`  
-**输出**: `work/project/doc/requirement_report_*.md`
-
-**流程**:
-1. 初始化会话（`full_memory.json` + `full_summary.json`）
-2. 前 N-1 轮：`discuss` 模式 — PM Agent 加载多个角色卡片（Customer, User, Manager, Innovator, Business, QA, Data, Architect, Security）进行多角度需求讨论
-3. 最后一轮：`final_output` 模式 — 输出完整 PRD 文档
-4. 如果 LLM 未产出有效 PRD，降级为从 `full_summary.json` 自动生成
-
-**关键文件**:
-- [agent/product_manager.py](agent/product_manager.py) — PM Agent 实现
-- [brainAgent/orchestrator.py](brainAgent/orchestrator.py) — 需求分析编排器
-- [Tools/memory/load_memory.py](Tools/memory/load_memory.py) — 记忆加载
-- [Tools/memory/save_memory.py](Tools/memory/save_memory.py) — 记忆保存
-- [Tools/memory/merge_memory.py](Tools/memory/merge_memory.py) — 摘要合并
-
-### Step 2: 架构设计
-
-**入口**: `agent/architect.py → run_architect_agent()`  
-**输出**: `work/project/task/task_<timestamp>.json`
-
-**生成的 7 类契约**:
-| 契约类型 | 说明 |
-|----------|------|
-| `scenario` | 业务场景（用户故事 → 交互流程） |
-| `model` | 数据模型（表结构、字段、约束） |
-| `logic` | 业务逻辑（事务边界、并发控制、补偿逻辑） |
-| `api` | API 接口（路由、端点、请求/响应） |
-| `db-api` | 数据库 API（SQL 模板、参数、返回值） |
-| `navigation` | 前端导航（页面跳转、数据传递） |
-| `auth` | 认证授权（Token 配置、刷新策略） |
-
-**生成的 5 类任务**:
-| 任务类型 | 说明 | 优先级 |
-|----------|------|--------|
-| `infra` | 基础设施（中间件、工具、配置） | 0 |
-| `db` | 数据库（DDL、初始化脚本） | 1 |
-| `frontend` | 前端（Vue 3 页面、Store、API） | 1.5 |
-| `backend` | 后端（Express 路由、Service） | 4.5 |
-| `integration` | 集成（路由注入、环境变量、最终校验） | 99 |
-
-**架构师后处理**:
-- 依赖注入（从 `config/file_refs.json` 注入已知文件依赖）
-- 外键检查（模型间外键关系验证）
-- 导航依赖（前端页面跳转关系）
-- 环境变量约束提取
-- 第三方服务检测
-
-### Step 3: 代码生成
-
-**入口**: `brainAgent/engineer.py → run_engineer()`  
-**输出**: 完整源代码 + `Memory/truths/engineer/*.json`
-
-**执行流程**:
-1. 加载 `task_*.json`，解析任务和契约
-2. 契约关键字段校验（model 必须有 tableName，api 必须有 basePath）
-3. 文件冲突检测
-4. 依赖图构建 → `build_layered()` 严格类型分层
-5. 分离 integration 任务
-6. 逐层并发执行（同层内并发，层间串行，支持依赖剪枝）
-7. 执行 integration 任务（路由注入、require 修复、env 补全）
-8. 语法检查（`node --check`）+ 环境变量一致性检查
-9. 生成执行报告 `execution_report_*.json`
-
-**5 类 Agent 的调度**:
+### 2.2 数据流全景
 
 ```
-Layer 0: [infra]        ── 同层并发
-    ├── middleware/auth.js
-    ├── middleware/permission.js
-    ├── utils/response.js
-    ├── config/db.js
-    └── .env + .env.example
-
-Layer 1: [db]           ── 同层并发
-    ├── database/schema_*.sql
-    └── scripts/init-db.js
-
-Layer 2: [frontend]     ── 同层并发（先生成，产出前端真理）
-    ├── src/pages/Login.vue
-    ├── src/stores/user.js
-    ├── src/api/auth.js
-    └── src/router/index.js
-
-Layer 3: [backend]      ── 同层并发（接收前端真理 + DB 模型）
-    ├── routes/auth.js
-    ├── services/userService.js
-    └── ...
-
-Layer 4: [integration]  ── 单独执行
-    └── app.js 路由注入 + src/main.js + .env 补全
-```
-
-**依赖剪枝算法**: 节点失败 → 沿依赖链向下递归裁剪全部后代节点。根因修复后自动解除。
-
-### Step 4: 测试验证
-
-**入口**: `brainAgent/scheduler.py → run_scheduler()`  
-**输出**: 测试通过/失败报告 + 自动修复 + 评分
-
-详见 [第 10 节](#10-测试验证子系统abcd-循环)。
-
----
-
-## 5. 目录结构
-
-```
-Agent/
-├── .claude/                    # Claude CLI 配置
-│   └── settings.local.json     # 权限/允许的命令
-├── .env.example                # 环境变量模板
-├── agent/                      # ── 核心 Agent 实现 (13 文件) ──
-│   ├── base_designer.py        #   设计器基类（infra/db/backend/frontend 共用）
-│   ├── backend_designer.py     #   后端设计器（薄封装 → BaseDesigner）
-│   ├── frontend_designer.py    #   前端设计器（薄封装 → BaseDesigner）
-│   ├── database_designer.py    #   数据库设计器（扩展 BaseDesigner，SQL 专项）
-│   ├── infrastructure_designer.py # 基础设施设计器（.env 一致性检查）
-│   ├── integrator.py           #   集成 Agent（路由注入/require 修复）
-│   ├── product_manager.py      #   产品经理 Agent（多轮需求讨论）
-│   ├── architect.py            #   架构师 Agent（PRD → 契约 + 任务）
-│   ├── prompt_builder.py       #   统一提示词组装器
-│   ├── test_architect.py       #   测试架构师 Agent
-│   ├── test_writer.py          #   测试编写 Agent（Step A）
-│   ├── test_runner.py          #   测试诊断 Agent（Step B + D）
-│   └── source_fixer.py         #   源码修复 Agent（Step C）
-├── brainAgent/                 # ── 编排调度器 (6 文件) ──
-│   ├── basic.py                #   统一入口（CLI 参数控制起止阶段）
-│   ├── orchestrator.py         #   需求分析编排器
-│   ├── engineer.py             #   工程调度器（分层并发 + 剪枝）
-│   ├── scheduler.py            #   测试调度器（ABCD 循环 + Redis 快照）
-│   ├── knowledge_builder.py    #   知识库构建器（6 步流水线）
-│   └── retrieval_scheduler.py  #   统一检索调度器（3x3 扩散搜索）
-├── localAgent/                 # ── LLM 调用封装 (2 文件) ──
-│   ├── knowledge_builder.py    #   refine + merge LLM 调用
-│   └── retrieval_agent.py      #   angle_analysis + deliver LLM 调用
-├── config/                     # ── 配置文件 (4 文件) ──
-│   ├── env_defaults.json       #   环境变量默认值
-│   ├── file_refs.json          #   已知文件引用依赖映射
-│   ├── infra_fixes.json        #   基础设施自动修复模式
-│   └── mock_factories.json     #   Jest Mock 工厂策略（21 个包）
-├── skill/                      # ── Agent 技能文档 (~80+ 文件) ──
-│   ├── code/                   #   代码质量标准
-│   │   ├── quality.md          #   代码质量 + 三端运行时规范
-│   │   ├── readability.md      #   可读性规范
-│   │   └── ui.md               #   前端 UI 设计规范
-│   ├── design/                 #   PM 角色卡片 + PRD 模板
-│   │   ├── product_manager.md  #   PM 主技能
-│   │   ├── customer.md, user.md, manager.md, innovator.md
-│   │   ├── business_expert.md, qa.md, data.md
-│   │   ├── architect.md, security.md
-│   │   └── prd_template.md
-│   ├── engineer/               #   工程师角色定义
-│   │   ├── architect.md, backend.md, frontend.md
-│   │   ├── database.md, infrastructure.md, integrator.md
-│   ├── test/                   #   测试规范 + 模板
-│   │   ├── test_architect.md   #   测试架构设计
-│   │   ├── a/                  #   写测试诊断 (11 文件)
-│   │   ├── b/                  #   运行诊断 (11 文件)
-│   │   ├── c/                  #   源码修复 (11 文件)
-│   │   ├── d/                  #   验证诊断 (11 文件)
-│   │   ├── roles/              #   各步角色定义
-│   │   └── templates/          #   测试模板 (17 个)
-│   └── rag/                    #   RAG 指令
-│       ├── refine.md, merge.md
-│       ├── angle_analysis.md, deliver.md
-│       └── retrieval_skill.md
-├── Tools/                      # ── 可复用工具 (20+ 文件) ──
-│   ├── coding/                 #   文件 CRUD + 语法检查
-│   │   ├── create_file.py      #   创建单个文件
-│   │   ├── create_files.py     #   批量创建文件
-│   │   ├── delete_file.py      #   删除文件
-│   │   ├── edit_lines.py       #   按行编辑
-│   │   ├── modify_file.py      #   修改文件
-│   │   ├── read_file.py        #   读取文件
-│   │   ├── list_files.py       #   列出目录
-│   │   ├── get_functions_info.py # 提取函数信息
-│   │   └── syntax_check.py     #   node --check 语法检查
-│   ├── memory/                 #   记忆管理
-│   │   ├── ban_memory.py       #   禁令记忆（指纹 + 禁令对）
-│   │   ├── load_memory.py      #   JSON 记忆加载
-│   │   ├── save_memory.py      #   JSON 记忆保存
-│   │   └── merge_memory.py     #   摘要合并
-│   ├── rag/                    #   RAG 知识库
-│   │   ├── build/tools.py      #   表管理/嵌入/过滤/去重/锚点
-│   │   ├── retrieval/tools.py  #   单角度检索/去重/统计
-│   │   ├── code_retrieval/     #   代码检索（BM25 + 向量 + Reranker）
-│   │   ├── search_rag.py       #   RAG 检索 Agent 工具
-│   │   └── search_code.py      #   代码检索 Agent 工具
-│   ├── contract/               #   契约处理
-│   │   └── parser.py           #   契约 → 实现指令 / 测试场景
-│   ├── scoring/                #   代码评分
-│   │   └── code_scorer.py      #   5 维评分 + S/A/B/C/D 等级
-│   ├── skill/                  #   技能加载
-│   │   └── load_skill.py       #   加载 Markdown 技能文件
-│   └── testing/                #   测试执行
-│       └── run_test.py         #   Jest/Vitest 运行 + 结果解析
-├── utils/                      # ── 共享工具 (4 文件) ──
-│   ├── dependency_graph.py     #   依赖图构建（类型分层拓扑排序）
-│   ├── json_extractor.py       #   LLM 输出 JSON 提取
-│   ├── logger.py               #   统一日志（文件 + stderr）
-│   └── token.py                #   Token 追踪（非侵入式流包装）
-├── knowledge/                  # ── 运行时：LanceDB 向量数据库 ──
-├── Memory/                     # ── 运行时：Agent 记忆 + 日志 ──
-├── work/                       # ── 运行时：生成产物 ──
-└── doc/                        # ── 文档 ──
-    └── SYSTEM_ARCHITECTURE.md  #   本文档
+一句话需求
+    │
+    ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  Stage 1: 需求分析                                                │
+│  需求 → PM planner → 10角色讨论(N轮) → PRD                        │
+│  产物: work/project/doc/requirement_report_*.md                   │
+│  中间: Memory/chat_sessions/{id}/full_memory.json + full_summary  │
+│        Memory/ui_styles/*.md (Designer 产出的 UI 风格文档)         │
+└──────────────────────────────────────────────────────────────────┘
+    │ PRD (markdown)
+    ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  Stage 2: 架构设计                                                │
+│  PRD → plan_tree → data契约 → interfaces契约 → business契约 → tasks │
+│  产物: work/project/task/task_*.json (契约 + 任务)                 │
+│  中间: work/project/task/_scene_tree.md                           │
+│        Memory/architect/_contracts_*.json (中间契约)               │
+│        Memory/architect/_tasks.json                               │
+└──────────────────────────────────────────────────────────────────┘
+    │ task.json (contracts + tasks)
+    ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  Stage 3: 代码生成                                                │
+│  tasks → DAG分层 → [infra→db→frontend→backend→integration]        │
+│  每层: 并发执行同类型任务 → 输出真理 JSON                            │
+│  产物: work/project/ 完整项目源码                                   │
+│  真理: Memory/truths/engineer/{taskId}.json                        │
+└──────────────────────────────────────────────────────────────────┘
+    │ 项目源码 + 真理
+    ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  Stage 4: 测试架构                                                │
+│  源码+task+PRD → test_plan_tree → static→interface→logic→quality   │
+│  产物: work/project/test/test_tasks_*.json                         │
+│  中间: Memory/test_architect/_test_*.json                          │
+└──────────────────────────────────────────────────────────────────┘
+    │ test_tasks.json
+    ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  Stage 5: ABCD 测试循环                                           │
+│  For each layer:                                                  │
+│    A(test_writer) → B(test_runner) → C(source_fixer) → D(verify)  │
+│  产物: test/*.test.js + Memory/test_logs/*.json                    │
+│  Ban: Memory/test_failure/*.json + Memory/source_failure/*.json   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 6. 模块详解
+## 第三章：核心子系统设计
 
-### 6.1 agent/ — 核心 Agent 实现
+### 3.1 需求分析子系统
 
-#### 6.1.1 BaseDesigner (`agent/base_designer.py`)
+#### 3.1.1 架构概览
 
-**所有工程 Agent 的基类**，封装了以下公共逻辑：
-
-- Agent 创建（`picoagents.Agent`，配置 tools、model_client、max_iterations）
-- 流处理（`wrap_agent_stream` 包装，捕获 ErrorEvent / FatalErrorEvent）
-- JSON 解析错误自动重试（非 db 类型）
-- 工具列表组装（`create_files`、`edit_files`、`search_rag`、`search_code`）
-- 对外接口提取（`_extract_exposed_interface` — LLM 精读源码 + 契约 + 依赖链）
-- 真理文件搬运（workspace → 项目根 Memory/）
-- 真理一致性交叉验证（Agent 声明 vs 正则扫描）
-
-**子类**:
-| 子类 | 文件 | 差异化 |
-|------|------|--------|
-| `BackendDesigner` | `backend_designer.py` | `agent_type="backend"` |
-| `FrontendDesigner` | `frontend_designer.py` | `agent_type="frontend"` |
-| `DatabaseDesigner` | `database_designer.py` | `agent_type="db"`, 禁用 JSON 重试，检查 SQL 文件 |
-| `InfrastructureDesigner` | `infrastructure_designer.py` | `agent_type="infra"`, 注入 env 模板，env 一致性校验 |
-
-**动态 max_iterations**: `base=3`，文件数>3 则+1，契约数>5 则+1，上限 5。integration 基础值为 4。
-
-#### 6.1.2 Product Manager (`agent/product_manager.py`)
-
-- 两种动作模式：`discuss`（轻量讨论）和 `final_output`（完整 PRD）
-- 加载 9 个角色卡片（从 `skill/design/`）
-- 多轮记忆管理（读写 `full_memory.json` / `full_summary.json`）
-- `save_report` 工具：将最终 PRD 写入文件
-
-#### 6.1.3 Architect (`agent/architect.py`)
-
-- 读取 PRD 报告 → 生成 `task_<timestamp>.json`
-- 7 类契约 + 5 类任务
-- 大量后处理逻辑：
-  - `_inject_dependencies()` — 从 `file_refs.json` 注入文件级依赖
-  - `_inject_foreign_keys()` — 外键检查
-  - `_inject_navigation_deps()` — 导航依赖
-  - `_inject_env_constraints()` — 环境约束提取
-  - `_third_party_detect()` — 第三方服务检测
-
-#### 6.1.4 Test Architect (`agent/test_architect.py`)
-
-- 读取 PRD + task.json → 生成 `test_tasks_<timestamp>.json`
-- 8 层测试计划（repair/infra/db/frontend_static/auth/db_api/api/backend_proc/navigation/logic/scenario/nfr）
-- LLM 输出分片合并支持
-- 自动修复 targetFiles（验证源任务 outputFiles 存在性）
-
-#### 6.1.5 Test Writer (`agent/test_writer.py`) — Step A
-
-- 从测试任务生成 Jest/Vitest 测试文件
-- 检测 ESM/CJS 模块格式
-- 检测第三方库依赖以生成准确 Mock
-- 语法验证 + Mock 完整性检查 + 闭包完整性检查
-- 确定性 Mock 块生成（`app.js` + 冒烟测试）
-
-#### 6.1.6 Test Runner (`agent/test_runner.py`) — Step B + D
-
-- B 步骤：诊断测试失败，输出禁令（fingerprint → prohibition）
-- D 步骤：验证源码修复
-- 加载层次诊断角色（`skill/test/b/` / `skill/test/d/`）
-- 从错误堆栈提取源码上下文
-- 生成结构化真理输出
-
-#### 6.1.7 Source Fixer (`agent/source_fixer.py`) — Step C
-
-- 基于测试禁令修复源码
-- 白名单写目标（只能修改 targetFiles 中的文件）
-- 编辑后语法验证
-- 支持用兄弟参考文件作为模板创建缺失文件
-
-#### 6.1.8 Integrator (`agent/integrator.py`)
-
-- 预扫描缺失的 require/import 路径
-- 注入后端路由到 `app.js`
-- 修复多导出路由模块
-- 扫描缺失的环境变量
-- 最终语法 + 环境一致性收尾
-
-#### 6.1.9 Prompt Builder (`agent/prompt_builder.py`)
-
-**统一提示词组装器**，所有 Agent 共用。
-
-**固定顺序（保证跨 task 的 LLM 缓存命中率）**:
-1. `skill/engineer/{type}.md` — Agent 专属技能
-2. 工作区路径
-3. **上游真理**（已生成模块的对外接口，LLM 提取的完整签名/字段，不可质疑）
-4. `skill/code/quality.md` — 代码质量 + 三端运行时规范
-5. `skill/code/readability.md` — 可读性
-6. `skill/code/ui.md` — UI 设计（仅前端）
-7. 额外指令（envConstraints 等）
-8. 输出铁律（禁止总结、只能输出工具调用或完成消息）
-
-**上游真理加载规则**（`_load_upstream_truths`）:
-- 下层真理（`truth.type != agent_type`）→ 展示 `exposed_to_upper`
-- 同层真理（`truth.type == agent_type`）→ 展示 `exposed_to_peers`
-- 前端先生成（Layer 1），后端后生成（Layer 2）→ 后端可看到前端真理
-
-**提示词模板**:
-- `_USER_PROMPT_TEMPLATE` — 标准工程任务模板（含真理文件格式）
-- `_INTEGRATION_USER_PROMPT_TEMPLATE` — 集成任务专用模板
-- 每种 Agent 类型有专属的真理 JSON 模板（`_TRUTH_TEMPLATES`）
-
----
-
-### 6.2 brainAgent/ — 编排调度器
-
-#### 6.2.1 basic.py — 统一入口
-
-**命令行**:
-```bash
-python brainAgent/basic.py "设计一个线上商城购物系统"          # 全流程
-python brainAgent/basic.py -orchestrator "需求"               # 只跑需求分析
-python brainAgent/basic.py -architect                         # 从架构开始
-python brainAgent/basic.py -engineer                          # 从代码生成开始
-python brainAgent/basic.py -test --fast                       # 从测试开始(快速模式)
+```
+                    ┌──────────────────┐
+                    │   PM Planner     │
+                    │  (product_manager│
+                    │   .md skill)     │
+                    └────────┬─────────┘
+                             │ plan JSON
+                             ▼
+              ┌──────────────────────────────┐
+              │     orchestrator.py          │
+              │  Wave 1: customer/user/      │
+              │          innovator           │
+              │  Wave 2: manager/business/   │
+              │   security/data/architect/   │
+              │   qa/designer                │
+              └──────────────┬───────────────┘
+                             │ 并发调用
+              ┌──────────────┼──────────────┐
+         ┌────▼────┐   ┌────▼────┐   ┌────▼────┐
+         │RoleSub   │   │RoleSub   │   │RoleSub   │
+         │Agent     │   │Agent     │   │Agent     │
+         │(customer)│   │(user)    │   │(...)     │
+         └────┬─────┘   └────┬─────┘   └────┬─────┘
+              │ summary_json  │              │
+              └──────────────┼──────────────┘
+                             ▼
+              ┌──────────────────────────────┐
+              │   merge_role_summaries()     │
+              │   合并 modules + entities    │
+              │   + pending                  │
+              └──────────────────────────────┘
 ```
 
-**流程控制**: 通过 `-orchestrator`, `-architect`, `-engineer`, `-test` 标志控制起始阶段。所有标志之后的步骤都会执行。
+#### 3.1.2 RoleSubAgent 设计
 
-**内置校验**:
-- `_validate_code_generation()` — 对所有 JS 文件运行 `node --check`
-- `_validate_env_consistency()` — 扫描代码中 `process.env.X` 引用，与 `.env` 对比，自动补全缺失变量
+```python
+# agent/product_manager.py — 核心类
+class RoleSubAgent:
+    def __init__(self, role_name: str, model_client):
+        # 加载角色专用 skill (skill/design/{role}.md)
+        self.skill_content = skill_file.read_text("utf-8")
 
-**测试多轮**: 测试阶段最多自动运行 10 轮，每轮调用 `run_scheduler()`。全部通过或停滞（通过数不再增长）时停止。
-
-#### 6.2.2 orchestrator.py — 需求分析编排
-
-- 管理 N 轮讨论（前 N-1 轮 discuss，最后一轮 final_output）
-- 超时保护：discuss 600s，final_output 900s
-- 降级 PRD 生成（LLM 失败时从 `full_summary.json` 自动生成）
-
-#### 6.2.3 engineer.py — 工程调度器
-
-- 契约关键字段校验
-- 文件冲突检测（同一文件被多个任务声明）
-- `build_layered()` 严格类型分层
-- 逐层并发执行 + **依赖剪枝**（节点失败 → 递归剪枝全部后代）
-- 集成任务独立执行
-- `failed_tasks.json` 输出（含根因失败、剪枝任务、修复顺序）
-- 执行报告生成
-
-#### 6.2.4 scheduler.py — 测试调度器
-
-详见 [第 10 节](#10-测试验证子系统abcd-循环)。
-
-#### 6.2.5 knowledge_builder.py — 知识库构建器
-
-详见 [第 9 节](#9-rag-知识库子系统)。
-
-#### 6.2.6 retrieval_scheduler.py — 统一检索调度器
-
-详见 [第 9 节](#9-rag-知识库子系统)。
-
----
-
-### 6.3 localAgent/ — LLM 调用封装
-
-| 文件 | 功能 | 调用的 LLM 任务 |
-|------|------|----------------|
-| `knowledge_builder.py` | 知识库构建 LLM 调用 | `refine`（经验净化）、`merge`（语义合并） |
-| `retrieval_agent.py` | 检索 LLM 调用 | `angle_analysis`（查询分解）、`deliver`（结果格式化） |
-
----
-
-### 6.4 utils/ — 共享工具
-
-#### dependency_graph.py
-
-**核心算法**: 严格类型分层拓扑排序。
-
-1. 计算每个任务的拓扑深度（迭代至收敛，最大迭代次数防循环依赖）
-2. 按 `(类型优先级, 拓扑深度)` 排序 — **类型优先于深度**
-3. 同类型连续任务合并为一层 → LLM system prompt 缓存命中
-4. 同类型内按深度拆分子层（有依赖关系的同类型任务分拆）
-
-**类型优先级**（自底向上）:
-```
-repair(-1) < infra(0) < db(1) < frontend_static(1.5)
-  < auth(2) < db_api(3) < peer_deps(3.5)
-  < api(4) < backend_proc(4.5) < navigation(5)
-  < logic(6) < scenario(7) < nfr(8)
+    async def speak(self, context: dict, save_dir: str) -> dict:
+        # 1. 构建 instructions (角色 skill + 上下文)
+        # 2. 构建 user_prompt (本轮 focus + 模块树)
+        # 3. 创建 Agent (max_iterations=1 纯推理, =3 designer 有写文件工具)
+        # 4. 流式执行 + 提取 summary JSON
+        # 5. 自存完整回答到 Memory/agent_logs/pm/
+        return {"role": "...", "output": "...", "summary_json": {...}}
 ```
 
-**循环依赖检测**: 迭代超过 `len(tasks) * 10` 次未收敛 → 抛出 ValueError。
+每个 RoleSubAgent 独立执行，互不通信。PM Planner 通过 `plan` JSON 分配任务，调度器并发调用各角色，然后 `merge_role_summaries()` 按字段归属规则合并输出。
 
-#### json_extractor.py
+#### 3.1.3 轮次收敛策略
 
-从 LLM 输出提取 JSON，多种策略按优先级尝试：
-1. `<FILES_START>` 标签
-2. `<MEMORY_START>` 标签
-3. Markdown 代码块（`` ```json `` 或 `` ``` ``）
-4. 原始 `{...}` 匹配（括号平衡）
-5. `[...]` 匹配
+```
+R1:  主干 (3-5 个根模块, 调全部 10 角色)
+R2:  枝干 (1-2 个新模块, 广度优先)
+R3:  枝干 — 继续展开
+R4:  枝干 — 最后展开
+R5:  final_output — 解决所有 pending + 输出 PRD
 
-#### logger.py
+进度曲线:
+  早期 (0-40%): 保守。砍>延。安全基线最小化。
+  中期 (40-70%): 深化。逐步引入审计/限流/降级。
+  后期 (70-100%): 加强。回头加强已有模块，不新开主干。
+```
 
-统一日志，双输出：
-- stderr：WARNING 及以上
-- 文件：DEBUG 及以上，按日轮转（`agent_YYYYMMDD.log`）
+### 3.2 架构设计子系统
 
-#### token.py
+#### 3.2.1 5 步流水线设计
 
-非侵入式 Token 追踪器，包装 Agent 事件流：
-- 估算输入/输出 Token
-- 计算成本（支持 DeepSeek 定价）
-- 保存 JSON 报告到日志目录
+```
+PRD (markdown)
+    │
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 0: plan_tree (scene_tree.md skill)                       │
+│   输入: PRD 全文 + §7 计数目标                                 │
+│   产出: _scene_tree.md                                        │
+│   内容: §1 全局摘要 §2 模块矩阵 §3 数据实体地图                  │
+│         §4 页面导航 §5 鉴权需求 §6 基础设施清单                 │
+│         §7 覆盖计数表 §8 全局决策记录                           │
+│   策略: 自上而下，max_iter=4                                   │
+└──────────────────────────────────────────────────────────────┘
+    │ plan_tree (唯一基准)
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 1: data 层 (data.md skill)                               │
+│   输入: plan_tree                                             │
+│   产出: _contracts_data.json (model + auth)                   │
+│   特点: 无契约依赖 — 自下而上第1层                              │
+│   产出: model 契约 (tableName/fields/indexes/foreignKeys/seed) │
+│         auth 契约 (tokenConfig/endpoints/middleware)           │
+└──────────────────────────────────────────────────────────────┘
+    │ data 契约
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 2: interfaces 层 (interfaces.md skill)                   │
+│   输入: plan_tree + data 契约                                 │
+│   子步骤(并发):                                                │
+│     2a: api 契约 (HTTP 接口 — method/path/request/response)    │
+│     2b: db-api 契约 (数据库 CRUD — operation/table/io)         │
+│     2c: navigation 契约 (页面跳转 — fromPage/toPage/passBy)    │
+│   每子步 max_iter=1 (输出量可控，一次到位)                      │
+└──────────────────────────────────────────────────────────────┘
+    │ data + interfaces 契约
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 3: business 层 (business.md skill)                       │
+│   输入: plan_tree + data + interfaces                         │
+│   产出: _contracts_business.json (scenario + logic)            │
+│   特点: 依赖全部前序层                                         │
+│   scenario: 业务流程编排 (chain/priority/finalState)           │
+│   logic: 业务逻辑 (serviceSignature/input/output/process/      │
+│          transactionBoundary/apiMapping/dbApiMapping/nfr)     │
+└──────────────────────────────────────────────────────────────┘
+    │ 全部 7 类契约
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 4: tasks 层 (tasks.md skill)                             │
+│   输入: plan_tree + 全部契约 ID 清单 + 计数目标                 │
+│   产出: _tasks.json (5 类任务 + 显式依赖链)                     │
+│   任务类型: infra / db / frontend / backend / integration      │
+│   每个任务: taskId/type/dependencies/outputFiles/usesContracts │
+└──────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 5: 合并验证                                               │
+│   合并全部契约 → 按类型分组 → 防御性校验                           │
+│   model ≥ 实体数, api > 0, db-api > 0, navigation > 0,         │
+│   scenario > 0, logic > 0, tasks ≥ 预期数                       │
+│   输出: task_{timestamp}.json                                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### 3.2.2 契约体系设计
+
+7 类契约构成完整的设计规约，覆盖从数据到业务流程的全部层次：
+
+```
+┌──────────────────────────────────────────┐
+│         business 层 (编排层)              │
+│  ┌────────────┐  ┌────────────────────┐  │
+│  │  scenario  │  │      logic         │  │
+│  │ 业务流程编排│  │  业务逻辑(事务边界) │  │
+│  │ chain/     │  │  serviceSignature  │  │
+│  │ priority/  │  │  /input/output/    │  │
+│  │ finalState │  │  process/nfr       │  │
+│  └─────┬──────┘  └────────┬───────────┘  │
+│        │ 编排              │ 调用          │
+├────────┼───────────────────┼───────────────┤
+│        ▼                   ▼              │
+│  ┌──────────────────────────────────────┐ │
+│  │         interfaces 层 (接口层)        │ │
+│  │  ┌────────┐ ┌────────┐ ┌──────────┐ │ │
+│  │  │  api   │ │ db-api │ │navigation│ │ │
+│  │  │HTTP接口│ │CRUD操作│ │ 页面跳转  │ │ │
+│  │  └────────┘ └────────┘ └──────────┘ │ │
+│  └──────────────────────────────────────┘ │
+│                                           │
+│  ┌──────────────────────────────────────┐ │
+│  │           data 层 (基础层)            │ │
+│  │  ┌────────────┐  ┌────────────────┐  │ │
+│  │  │   model    │  │     auth       │  │ │
+│  │  │ 数据表结构  │  │  认证配置      │  │ │
+│  │  │ tableName/ │  │  JWT策略/      │  │ │
+│  │  │ fields/    │  │  端点/中间件    │  │ │
+│  │  │ indexes/FK │  │                │  │ │
+│  │  └────────────┘  └────────────────┘  │ │
+│  └──────────────────────────────────────┘ │
+└──────────────────────────────────────────┘
+```
+
+#### 3.2.3 关键算法：自动展开嵌套包裹
+
+Model 有时在 `interfaces` 输出中多一层嵌套（如 `{navigations: [{type: "navigation", ...}]}`），通过 `_flatten_contract_items()` 自动展开：
+
+```python
+# agent/architect.py
+def _flatten_contract_items(items: list) -> list:
+    known_wrappers = {"navigations", "apis", "db_apis", "db-api",
+                      "models", "auths", "contracts"}
+    for item in items:
+        if isinstance(item, dict):
+            keys = list(item.keys())
+            if len(keys) == 1 and keys[0] in known_wrappers:
+                inner = item[keys[0]]
+                if isinstance(inner, list):
+                    flat.extend(_flatten_contract_items(inner))  # 递归展开
+```
+
+### 3.3 代码生成子系统
+
+#### 3.3.1 分层并发执行模型
+
+```
+task.json {contracts: {...}, tasks: [...]}
+    │
+    ▼
+┌──────────────────────────────────────────────────────────┐
+│  build_engineer_layers(tasks)                             │
+│  1. 拓扑排序计算每个任务的深度 (BFS 迭代至收敛)             │
+│  2. 按 (类型优先级, 深度) 全局排序                         │
+│  3. 相邻同类型无内部依赖 → 合并为一层                      │
+│                                                          │
+│  输出: [[{infra tasks}], [{db tasks}],                    │
+│         [{frontend tasks}], [{backend tasks}],            │
+│         [{integration task}]]                             │
+└──────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌──────────────────────────────────────────────────────────┐
+│  逐层执行 (for each layer):                               │
+│  1. 剪枝: 上游失败/剪枝 → 本层依赖该上游的任务被剪枝        │
+│  2. 并发: asyncio.gather(*[execute_task(t) for t in runnable]) │
+│  3. 真理: 成功后持久化到 Memory/truths/engineer/           │
+│                                                          │
+│  层间串行 (保证依赖) | 层内并行 (最大化效率)               │
+└──────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌──────────────────────────────────────────────────────────┐
+│  Integration (最后执行):                                  │
+│  1. Python 预生成 init-db.js + seed-users.js + 占位图     │
+│  2. Agent 执行: 路由注册 + env 配置 + Vite 构建 + DB 初始化 │
+│  3. 后处理: 自动注入缺失路由 + 展开多路由 + 清理死路由      │
+│           + env 补全 + 部署清单                            │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### 3.3.2 BaseDesigner 设计
+
+`BaseDesigner` 是所有工程师 Agent 的基类，封装了 Agent 创建、流处理、工具包装、真理提取等公共逻辑：
+
+```python
+# agent/base_designer.py — 核心流程
+class BaseDesigner:
+    async def run(self, task, workspace_root, relevant_contracts, extra_instructions):
+        # 1. 构建工具: create_files + edit_files + search_rag + search_code
+        #    带白名单校验 + 调用次数限制(≤2次) + Step 1 窗口锁
+
+        # 2. 组装 System Prompt (通过 prompt_builder):
+        #    共享 skill → 专属 skill → 场景树 → UI 文档 → 上游真理
+
+        # 3. 组装 User Prompt (动态, 每 task 不同):
+        #    任务 JSON + 关联契约 + 真理模板
+
+        # 4. 创建 Agent (max_iterations=6~7)
+
+        # 5. 流式执行 + Token 追踪
+
+        # 6. 提取真理 JSON → 保存到 Memory/truths/engineer/
+
+        # 7. 校验: 真理文件存在 + outputFiles 存在且非空
+        return {"task_id": tid, "success": True/False, ...}
+```
+
+#### 3.3.3 工具调用控制
+
+```
+工程师 Agent 的执行流程 (skill/code/workflow.md):
+
+Step 1 — 搜集 (可选, 进入 Step 2 后不可再调)
+  ├── search_rag()     ← 必须与 search_code 在同一次响应中并行调用
+  ├── search_code()    ← 合计只能调 1 次
+  └── 判断: 契约信息完整 → 跳过 Step 1，直接 Step 2
+
+Step 2 — 创建 (必须)
+  └── create_files()   ← 一次性传入所有 outputFiles，1 次调用
+
+Step 3 — 修复 (按需, 最多 2 次)
+  ├── edit_files() 或 create_files()  ← 修 1 次就够
+  └── 合计 create+edit ≥ 3 次 → 框架拒绝
+
+Step 4 — 真理 (必须)
+  └── 输出真理 JSON → 隐含
+```
+
+**死循环防护机制**：
+- 纯文本无工具调用 → 框架终止 Agent
+- 同一工具连续失败 2 次 → 放弃该工具
+- `🛑_NEXT` 字段是权威下一步指令
+- 修过 2 次后忽略 `🛑_NEXT` 的"继续修"指令
+
+#### 3.3.4 真理传递机制
+
+```
+工程师 A (backend, t_order_01) 完成任务
+    │
+    ▼ 输出真理 JSON
+┌─────────────────────────────────────────┐
+│ Memory/truths/engineer/t_order_01.json   │
+│ {                                        │
+│   "task_id": "t_order_01",               │
+│   "type": "backend",                     │
+│   "exposed": {                           │
+│     "exposed_to_upper": {                │ ← 下游 Agent 可见
+│       "POST /api/orders": {              │
+│         "handler": "createOrder",        │
+│         "request": {...},                │
+│         "response": {...}                │
+│       }                                  │
+│     },                                   │
+│     "exposed_to_peers": {                │ ← 同层 Agent 可见
+│       "createOrder(req, res)": {...}     │
+│     }                                    │
+│   }                                      │
+│ }                                        │
+└─────────────────────────────────────────┘
+
+下游 Agent (frontend, t_order_page_01) 通过 prompt_builder 加载:
+  _load_upstream_truths("frontend", task=t_order_page_01)
+  → 只加载 task.dependencies 中声明的上游真理
+  → 下层真理 → exposed_to_upper
+  → 同层真理 → exposed_to_peers
+```
+
+#### 3.3.5 集成验证体系
+
+集成 Agent (`integrator.py`) 执行多层次的验证：
+
+```
+预扫描 (pre-scan, Python 确定性检查):
+  ├── require/import 路径断裂检测
+  ├── package.json scripts → 文件存在性
+  ├── app.js 路由引用 → 文件存在性
+  ├── npm 依赖完整性 (package.json deps vs require() 调用)
+  └── 全链加载测试 (node -e "require('./app')" 不崩溃)
+
+Agent 执行:
+  ├── 路由注册 + 中间件挂载
+  ├── .env 配置 (代码扫描 process.env.X → 根配置交叉 → 填值)
+  ├── Vite 构建
+  └── DB 初始化 (DDL + 种子数据)
+
+后处理 (Python 自动修复):
+  ├── 自动注入缺失路由
+  ├── 展开多路由导出 (module.exports = {r1, r2} → 分别 app.use)
+  ├── 清理不存在文件的 require
+  ├── 死路由注释 (router/index.js 中指向不存在 .vue 的懒加载)
+  ├── env 变量补全 (代码 scan → 缺失变量 → .env 追加)
+  └── 四文件同步 (.env → .env.example/.development/.production)
+```
+
+### 3.4 测试修复子系统
+
+#### 3.4.1 测试架构分层
+
+```
+test_architect.py 流水线 (与架构师相同的分层模式):
+
+Step 0: test_plan_tree (从上往下全量规划)
+    → work/project/test/_test_plan_tree.md
+
+Step 1: 静态层 (static.md skill)
+    → _test_static.md.json
+    层: infra / db / frontend / peer_deps / integ
+    特点: 无 testScenarios，用 checkPoints 数组代替
+
+Step 2: 接口层 (interface.md skill)
+    → _test_interface_{auth,api,dbapi,nav}.json (4 步子步)
+    层: auth / db_api / api / navigation
+
+Step 3: 逻辑层 (logic.md skill)
+    → _test_logic.json
+    层: backend_proc / logic / scenario
+    scenario 无 sourceTask，targetFiles = 全部依赖的并集
+
+Step 4: 质量层 (quality.md skill)
+    → _test_quality.json
+    层: nfr (k6 性能测试)
+
+Step 5: 合并
+    → test_tasks_{ts}.json
+    去重 + 插入 t_repair_failed 硬编码占位任务
+```
+
+#### 3.4.2 ABCD 循环机制
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                   ABCD 循环 (多轮迭代收敛)                     │
+│                                                              │
+│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌───────┐ │
+│   │    A    │────▶│    B    │────▶│    C    │────▶│   D   │ │
+│   │test     │     │test     │     │source   │     │test   │ │
+│   │writer   │     │runner   │     │fixer    │     │runner │ │
+│   │写测试代码│     │跑测试   │     │修复源码  │     │验证   │ │
+│   │         │     │诊断失败  │     │定点修复  │     │通过→真理│ │
+│   │         │     │输出 ban │     │         │     │失败→ban│ │
+│   └─────────┘     └─────────┘     └─────────┘     └───────┘ │
+│                                                              │
+│   Ban 记忆持久化:                                             │
+│   Memory/test_failure/{id}.json   ← B→A (测试自身的修复)      │
+│   Memory/source_failure/{id}.json ← B→C, D→C (源码修复)      │
+│                                                              │
+│   收敛终点: 全部 test_tasks 通过 + test_success && source_success │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### 3.4.3 B/D 诊断 Agent 设计
+
+```
+test_runner.py (B 步骤 / D 步骤):
+
+B 步骤 — 诊断测试失败:
+  1. 跑测试 → 解析失败详情
+  2. 从错误堆栈提取源文件:行号
+  3. 加载 B 角色 skill (skill/test/diagnosis/b/{testType}/{layer}.md)
+  4. 请求源码上下文 → Agent 诊断
+  5. 调用 load_d_card() → 加载 D 角色知识 (判断 fix_target=test/source)
+  6. 输出 <!--FINAL--> ban JSON (f=指纹 | b=修复指令)
+
+D 步骤 — 验证修复:
+  1. 接收 C 修改后的源码
+  2. 重新跑测试
+  3. 变更分析 → 对照验收 → 回归扫描 → 意图分析
+  4. 通过 → 输出真理 JSON，失败 → 输出新 ban
+```
+
+#### 3.4.4 Ban 指纹格式
+
+```
+Ban 格式 (f=指纹 | b=修复指令):
+
+f = layer | fix_target | file:line | SUBTYPE
+
+字段说明:
+  layer:      infra/db/frontend/auth/db_api/api/navigation/
+              backend_proc/logic/scenario/nfr
+  fix_target: test (修测试文件) 或 source (修源码文件)
+  file:       文件路径:行号
+  SUBTYPE:    WRONG_COLUMN / SYNTAX / MOCK_GAP / MISSING_EXPORT /
+              WRONG_FORMAT / MISSING_ROLLBACK / CHEAT / ...
+
+示例:
+  f=backend_proc|source|controllers/orderController.js:45|WRONG_COLUMN
+  b=DON'T: 用 order.userId 查询 | fix: 改用 order.user_id (model 契约字段名)
+     | target=source
+
+  f=auth|test|test/t_auth_001.test.js:20|MOCK_GAP
+  b=DON'T: mock jwt.verify 返回 null | fix: mock 返回 {userId: 1, role: 'user'}
+     | target=test
+```
+
+#### 3.4.5 静态层直通模式
+
+静态层（infra/db/frontend/peer_deps/integ）跳过 ABCD 循环，采用直通模式：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  静态层执行流程 (source_fixer.py, is_static=True)             │
+│                                                             │
+│  1. Python 全量静态检查 (_run_full_static_check)              │
+│     ├── 语法检查 (node --check / esbuild)                    │
+│     ├── CJS 禁止检查 (src/ 下禁止 require/module.exports)    │
+│     ├── 导出分析 (实际导出 vs checkPoints)                    │
+│     ├── checkPoints 逐条对照                                  │
+│     ├── DDL vs 契约对比 (表名/字段/类型/约束/索引/FK)         │
+│     ├── 种子数据检查 (JSON 有效性/列名对齐/FK 引用一致性)     │
+│     ├── CJS require 链断裂检查 + 循环依赖检测                 │
+│     ├── npm 依赖完整性检查                                    │
+│     ├── 死路由检查 + 前端路由组件完整性                         │
+│     ├── 路由注册双向验证 (app.js → routes/ + routes/ → app.js)│
+│     ├── UI 色板检查 (vs Memory/ui_styles/ 动态色板)           │
+│     ├── Vite 构建检查 (按任务文件范围)                         │
+│     ├── 全链加载测试 (node app.js)                            │
+│     └── 端点覆盖检查 (route vs 前端 API 模块)                  │
+│                                                             │
+│  2. Agent 修复 (max_iterations=6)                             │
+│     工具: scan_services + read_files + edit_batch + create   │
+│           + search_rag + search_code + verify_checkpoints    │
+│     限制: edit/create 合计 1 次                                │
+│                                                             │
+│  3. verify_checkpoints() — Python 自检全部 checkPoints       │
+│     通过 → 输出真理 | 失败 → 输出 ban                        │
+│                                                             │
+│  4. Ban 存入 Memory (跨 attempt 记忆持久化)                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 3.4.6 双层屏障并发控制
+
+```
+同一 testType 内同层任务并发执行，通过双层屏障控制跨步同步：
+
+屏障 1 (C→D 解锁):
+  条件: b_p + s_o + s_f + skipped >= total
+  含义: 全部 B/C/smoke/skip 完成后，运行 D 验证的任务进入 D 步骤
+
+屏障 2 (D→下轮解锁):
+  条件: d_p + d_f >= s_o
+  含义: 全部 D 完成后，进入下一轮迭代
+
+状态变量:
+  total:  本轮参与 barrier 的任务总数
+  b_p:    B 测试全部通过 (无需 C/D, 直接 done)
+  s_o:    C 完成 + smoke 通过 (进入 D)
+  s_f:    C 完成 + smoke 失败 (回滚, 不参与 D)
+  skipped: B test ban / C fixer fail 等跳过的
+  d_p:    D 验证通过
+  d_f:    D 验证失败
+
+全局状态重置: _round_done >= total 且 d_p + d_f >= s_o
+  → total=0, 新 Events, 新 _registered_tasks
+```
 
 ---
 
-### 6.5 Tools/ — 可复用工具
+## 第四章：知识管理系统
 
-#### Tools/coding/ — 文件操作
+### 4.1 技能系统 (Skill)
 
-| 工具 | 函数签名 | 说明 |
-|------|----------|------|
-| `create_file` | `(path, content, overwrite, workspace)` | 创建单个文件 |
-| `create_files` | `(files[], overwrite, workspace, metadata)` | 批量创建，自动语法检查 |
-| `delete_file` | `(path, workspace)` | 删除文件 |
-| `edit_lines` | `(edits[], workspace)` | 按行号插入/替换/删除 |
-| `modify_file` | `(path, content, workspace)` | 覆盖文件内容 |
-| `read_file` | `(path, workspace)` | 读取文件 |
-| `list_files` | `(directory, workspace)` | 列出目录（知识库构建用） |
-| `get_functions_info` | `(path, workspace)` | 提取函数信息 |
-| `syntax_check` | `(files[], workspace)` | `node --check` 语法检查 |
-
-#### Tools/memory/ — 记忆管理
-
-- **ban_memory.py**: 禁令记忆（fingerprint + prohibition instruction 对），支持去重存储、格式化注入、按 task_id + 类型隔离
-- **load_memory.py**: 加载 JSON 记忆文件，支持默认值
-- **save_memory.py**: 保存 JSON 记忆文件
-- **merge_memory.py**: 合并讨论轮次摘要（模块级深度合并、实体去重、待决策问题去重）
-
-#### Tools/contract/ — 契约处理
-
-- **parser.py**: 解析 logic 契约 → 实现指令（事务边界、并发控制、补偿逻辑、错误映射）+ 测试场景生成
-
-#### Tools/scoring/ — 代码评分
-
-- **code_scorer.py**: 5 维度评分系统
-  - 源码评分：测试通过率 30% + 任务完成度 25% + 测试覆盖率 20% + 代码质量 15% + 记忆修复率 10%
-  - 测试代码评分：Mock 完整性 30% + 断言质量 25% + 场景覆盖 20% + 框架合规 15% + 语法 10%
-  - 等级：S(≥95) / A(≥90) / B(≥80) / C(≥70) / D(<70)
-
-#### Tools/rag/ — RAG 知识库
-
-详见 [第 9 节](#9-rag-知识库子系统)。
-
-#### Tools/testing/ — 测试执行
-
-- **run_test.py**: 执行 Jest/Vitest 测试，解析 JSON 输出，提取失败信息（错误类型、期望值/实际值、堆栈）
-
-#### Tools/skill/ — 技能加载
-
-- **load_skill.py**: 从 `skill/` 目录加载 Markdown 文件作为 Agent 系统提示词的一部分
-
----
-
-### 6.6 skill/ — Agent 技能文档 (~80+ 文件)
-
-所有技能文档均为 Markdown 格式，在被加载时作为 Agent 的 system prompt 的一部分。
+121 个 Markdown 文件构成分层知识体系，是 Agent 的"领域知识"来源：
 
 ```
 skill/
-├── code/                         # 代码质量标准（所有 Agent 共用）
-│   ├── quality.md                #   代码质量 + 三端运行时规范
-│   ├── readability.md            #   可读性规范
-│   └── ui.md                     #   前端 UI 设计（仅 frontend Agent）
-├── design/                       # 产品经理角色卡片
-│   ├── product_manager.md        #   PM 主技能（讨论和输出规范）
-│   ├── customer.md               #   客户视角
-│   ├── user.md                   #   用户视角
-│   ├── manager.md                #   管理者视角
-│   ├── innovator.md              #   创新者视角
-│   ├── business_expert.md        #   业务专家视角
-│   ├── qa.md                     #   质量视角
-│   ├── data.md                   #   数据视角
-│   ├── architect.md              #   架构视角
-│   ├── security.md               #   安全视角
-│   └── prd_template.md           #   PRD 输出模板
-├── engineer/                     # 工程 Agent 角色定义
-│   ├── architect.md              #   架构师
-│   ├── backend.md                #   后端工程师
-│   ├── frontend.md               #   前端工程师
-│   ├── database.md               #   数据库设计师
-│   ├── infrastructure.md         #   基础设施工程师
-│   └── integrator.md             #   集成工程师
-├── test/                         # 测试相关 (~50 文件)
-│   ├── test_architect.md         #   测试架构设计规范
-│   ├── a/                        #   A步: 测试编写诊断 (11 文件)
-│   ├── b/                        #   B步: 测试运行诊断 (11 文件)
-│   ├── c/                        #   C步: 源码修复 (11 文件)
-│   ├── d/                        #   D步: 验证诊断 (11 文件)
-│   ├── roles/                    #   各步骤角色定义
-│   └── templates/                #   17 个测试模板
-└── rag/                          # RAG Agent 指令
-    ├── refine.md                 #   经验净化指令
-    ├── merge.md                  #   语义合并指令
-    ├── angle_analysis.md         #   查询分解指令
-    ├── deliver.md                #   结果交付指令
-    └── retrieval_skill.md        #   检索技能描述
+├── design/           # 需求分析角色技能 (11 文件)
+│   ├── product_manager.md  # PM 任务规划师 — 核心编排技能
+│   ├── customer.md         # 客户视角 — 商业价值/ROI
+│   ├── user.md             # 用户视角 — 前台功能/痛点
+│   ├── manager.md          # 运营视角 — 后台管理/数据看板
+│   ├── innovator.md        # 创新视角 — 差异化/技术可行创新
+│   ├── business.md         # 行业专家 — 标准功能模板/偏差预警
+│   ├── qa.md               # 质量视角 — 边界场景/回归风险
+│   ├── data.md             # 数据视角 — 实体/约束/状态机
+│   ├── architect.md        # 架构视角 — 成本/基础设施/降级
+│   ├── security.md         # 安全视角 — 加密/Token/脱敏/合规
+│   └── designer.md         # 设计视角 — CSS 变量/组件风格
+│
+├── engineer/         # 工程技能 (12 文件)
+│   ├── architect/         # 架构师技能
+│   │   ├── common.md           # 通用编码规范
+│   │   ├── scene_tree.md       # 场景树生成规则
+│   │   ├── data.md             # 数据层契约规则
+│   │   ├── interfaces.md       # 接口层契约规则
+│   │   ├── business.md         # 业务层契约规则
+│   │   └── tasks.md            # 任务分配规则
+│   └── code_generation/   # 代码生成技能
+│       ├── infrastructure.md   # 基础设施工程师
+│       ├── database.md         # 数据库设计师
+│       ├── backend.md          # 后端开发工程师
+│       ├── frontend.md         # 前端开发工程师
+│       └── integrator.md       # 集成工程师
+│
+├── test/             # 测试技能 (100+ 文件)
+│   ├── architect/         # 测试架构师技能
+│   │   ├── common.md / static.md / interface.md / logic.md / quality.md
+│   ├── roles/a/           # A 步骤 (测试编写) — 按 testType/layer 分组
+│   │   ├── {testType}.md         # 通用角色
+│   │   └── {testType}/{layer}.md # 子层特化
+│   ├── diagnosis/b/       # B 步骤 (测试诊断) — 同上分组
+│   ├── diagnosis/d/       # D 步骤 (修复验证) — 同上分组
+│   ├── roles/c/           # C 步骤 (源码修复) — 同上分组
+│   ├── repair/            # 修复策略
+│   │   ├── a/{testType}/{layer}.md  # A 修复策略
+│   │   └── c/{testType}.md         # C 修复策略
+│   ├── templates/         # 测试模板
+│   │   └── {testType}/{layer}.md   # 按类型分层
+│   └── truths/            # 真理格式定义
+│       └── {layer}.md            # 每层真理的 JSON Schema
+│
+├── code/             # 代码规范 (3 文件)
+│   ├── quality.md         # 通用代码质量规范 (所有 Agent 共享)
+│   ├── readability.md     # 代码可读性规范 (所有 Agent 共享)
+│   └── workflow.md        # 工具调用与执行流程 (所有 Agent 共享)
+│
+└── rag/              # RAG 技能 (3 文件)
+    ├── retrieval_skill.md  # 检索路由技能
+    └── build/              # 知识库构建
+        ├── refine.md        # 经验净化
+        └── merge.md         # 语义合并
 ```
+
+**技能加载策略**：
+
+```python
+# agent/prompt_builder.py — System Prompt 组装顺序
+
+# ═══ 第 1 段: 5 种 Agent 完全共享 ═══ (缓存命中)
+quality.md       → "## 通用代码质量规范"
+readability.md   → "## 代码可读性规范"
+workflow.md      → "## 🛑 工具调用与执行流程"
+_scene_tree.md   → "## 🛑 场景树"
+
+# ═══ 第 2 段: 某类型专属 ═══
+# 前端:
+_global.md + _components.md → "## 🎨 全局 UI 设计规范"
+task.ui_style → 对应的 Memory/ui_styles/{name}.md → "## 🎨 本任务专属 UI 风格"
+
+# 所有:
+agent_type skill (infra/db/backend/frontend/integration).md
+
+# ═══ 第 3 段: 本任务专属 ═══
+_load_upstream_truths() → 上游真理 (仅直接依赖)
+extra_instructions      → 环境约束等
+
+# 测试 Agent (scheduler 组装):
+# role + template + repair → 动态组合:
+#   skill/test/roles/{step}/{testType}.md
+#   + skill/test/roles/{step}/{testType}/{layer}.md
+```
+
+### 4.2 localAgent 子系统 — 本地 LLM Agent 调用器
+
+`localAgent/` 包含两个轻量级 Agent 调用器，专为 RAG 知识库的 **LLM 净化** 和 **检索交付** 任务设计。它们不参与主代码生成流程，而是作为 RAG 流水线的"智能处理单元"。
+
+#### 4.2.1 设计定位
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                  localAgent 在系统中的位置                   │
+│                                                            │
+│  brainAgent/knowledge_builder.py                           │
+│    │  知识库构建调度器 (Python 硬编码流程)                    │
+│    │                                                       │
+│    ├──→ localAgent/knowledge_builder.py                    │
+│    │      └── run_knowledge_builder("refine", data)        │
+│    │           Step 3: LLM 经验净化 (去噪+结构化)            │
+│    │           Step 4: LLM 语义合并 (冲突消解)               │
+│    │                                                       │
+│  brainAgent/retrieval_scheduler.py                         │
+│    │  检索调度器 (Python 硬编码流程)                         │
+│    │                                                       │
+│    └──→ localAgent/retrieval_agent.py                      │
+│           ├── run_retrieval_agent("angle_analysis", data)  │
+│           │     Step 1: 查询多角度分析                       │
+│           └── run_retrieval_agent("deliver", data)         │
+│                 Step 3: 检索结果格式化交付                   │
+└────────────────────────────────────────────────────────────┘
+```
+
+#### 4.2.2 knowledge_builder.py — 知识构建 Agent
+
+```python
+# localAgent/knowledge_builder.py — 核心设计
+
+# 支持两种 LLM 任务:
+SKILL_PATH = {
+    "refine": "skill/rag/build/refine.md",    # 经验净化 (去噪+结构化)
+    "merge":  "skill/rag/build/merge.md",     # 语义合并 (冲突消解)
+}
+
+async def run_knowledge_builder(role: str, task) -> dict:
+    # 1. 加载对应的 skill 文件 (Markdown)
+    skill = load_skill(SKILL_PATH[role])
+
+    # 2. 将 task 数据 JSON 序列化后注入 prompt
+    instructions = f"{skill}\n\n用户的输入:\n{json.dumps(task)}"
+
+    # 3. 创建 Agent (无工具, 纯推理, max_iterations=2)
+    agent = Agent(name=f"knowledge_builder_{role}",
+                  instructions=instructions,
+                  model_client=model_client,
+                  tools=[], max_iterations=2)
+
+    # 4. 流式执行 + JSON 提取
+    for event in agent.run_stream(): collected += str(event)
+    return extract_json(collected)
+```
+
+**两个 LLM 任务的职责**:
+
+| 角色 | Skill | 输入 | 输出 | 用途 |
+|------|-------|------|------|------|
+| `refine` | refine.md | 原始 ban 记录列表 | 结构化的经验 JSON 数组 | 去掉 LLM 输出的噪音，补全 do/dont/context/severity/category |
+| `merge` | merge.md | 新旧两条相似经验 | 合并后的统一经验 JSON | 语义去重阶段 (sim≥0.85) 的冲突消解 |
+
+#### 4.2.3 retrieval_agent.py — 检索 Agent
+
+```python
+# localAgent/retrieval_agent.py — 核心设计
+
+# 支持两种 LLM 任务:
+SKILL_PATH = {
+    "angle_analysis": "skill/rag/search/angle_analysis.md",  # 查询角度分析
+    "deliver":        "skill/rag/search/deliver.md",         # 结果格式化交付
+}
+
+async def run_retrieval_agent(role: str, task) -> dict:
+    # 与 knowledge_builder 相同的模式:
+    # 加载 skill → 注入 JSON 数据 → 创建 Agent → 流式执行 → 提取 JSON
+    skill = load_skill(SKILL_PATH[role])
+    agent = Agent(name=f"retrieval_{role}",
+                  instructions=f"{skill}\n\n{json.dumps(task)}",
+                  model_client=model_client,
+                  tools=[], max_iterations=2)
+    return extract_json(collected)
+```
+
+**两个 LLM 任务的职责**:
+
+| 角色 | Skill | 输入 | 输出 | 用途 |
+|------|-------|------|------|------|
+| `angle_analysis` | angle_analysis.md | {query, task_id, agent_type} | {angles: [{id, name, query}]} | 将用户自然语言查询拆解为 3 个多角度检索查询 |
+| `deliver` | deliver.md | {results, angles, agent_type, ...} | {summary, delivery, suggestions} | 将去重后的检索结果格式化为目标 Agent 类型可直接消费的内容 |
+
+#### 4.2.4 设计模式总结
+
+localAgent 的两个模块采用完全相同的设计模式：
+
+```
+┌─────────────────────────────────────────┐
+│         localAgent 通用调用模式          │
+│                                         │
+│  1. 加载 Skill (Markdown 角色定义)       │
+│  2. 序列化 task → JSON 注入 prompt       │
+│  3. 创建 picoagents Agent               │
+│     - instructions = skill + task_data  │
+│     - tools = [] (纯推理, 无工具调用)    │
+│     - max_iterations = 2               │
+│  4. 流式执行 agent.run_stream()         │
+│  5. extract_json(collected) 提取结果    │
+│  6. 多层回退: JSON 解析失败 → 返回 error │
+└─────────────────────────────────────────┘
+```
+
+这种设计将 LLM 调用封装为**纯函数式接口**：输入 JSON → LLM 推理 → 输出 JSON。Python 调度器 (knowledge_builder / retrieval_scheduler) 负责硬编码流程控制，只在需要"智能判断"的节点调用 localAgent。
 
 ---
 
-### 6.7 config/ — 配置文件
+### 4.3 RAG 知识库
 
-| 文件 | 用途 |
-|------|------|
-| [config/env_defaults.json](config/env_defaults.json) | 14 个 Web 项目环境变量默认值（PORT, DB_HOST, JWT_SECRET 等），`infrastructure_designer.py` + `integrator.py` 使用 |
-| [config/file_refs.json](config/file_refs.json) | 已知文件引用依赖映射（如 `middleware/auth.js` → `utils/response.js`），架构师自动注入跨任务依赖 |
-| [config/infra_fixes.json](config/infra_fixes.json) | 基础设施自动修复模式（npm 包、babel 配置、Jest transform），integrator 使用 |
-| [config/mock_factories.json](config/mock_factories.json) | 21 个 npm 包的 Jest Mock 工厂策略（express, mysql2, jsonwebtoken 等），test_writer 使用 |
-
----
-
-## 7. 数据流
-
-### 7.1 主流水线数据流
+#### 4.3.1 完整架构
 
 ```
-需求描述 (一句话)
-  │
-  ▼
-[PM Agent] ──→ Memory/chat_sessions/{id}/full_memory.json   (完整讨论记录)
-  │            Memory/chat_sessions/{id}/full_summary.json   (累计摘要)
-  ▼
-requirement_report_*.md  (PRD 报告)
-  │
-  ▼
-[Architect Agent] ──→ work/project/task/task_*.json  (契约 + 任务)
-  │
-  ▼
-[Engineer Scheduler]
-  ├─── [Infra Agent]  ──→  Memory/truths/engineer/{infra_task}.json
-  ├─── [DB Agent]     ──→  Memory/truths/engineer/{db_task}.json
-  ├─── [Frontend Agent]──→ Memory/truths/engineer/{frontend_task}.json
-  ├─── [Backend Agent] ──→ Memory/truths/engineer/{backend_task}.json
-  └─── [Integrator]   ──→  .env 补全 + 最终校验
-  │
-  ▼
-源代码 (work/project/)
-  │
-  ▼
-[Test Scheduler] ──→ Memory/test_logs/{task_id}.json       (测试状态)
-  │                  Memory/test_failure/{task_id}.json     (测试禁令)
-  ▼                  Memory/source_failure/{task_id}.json   (源码禁令)
-测试通过报告 + 评分
-  │
-  ▼
-[Knowledge Builder] (可选) ──→ knowledge/  (LanceDB 经验库)
+┌──────────────────────────────────────────────────────────────────┐
+│                       RAG 知识库完整架构                            │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │              知识构建流水线 (brainAgent/knowledge_builder)    │  │
+│  │                                                            │  │
+│  │  Step 0: 文件发现                                           │  │
+│  │    list_files("Memory/test_failure,Memory/source_failure,   │  │
+│  │                work/project/test,work/project/task")        │  │
+│  │    classify_files() → memory_files + task_files + source    │  │
+│  │                                                            │  │
+│  │  Step 1: 记忆清洗                                           │  │
+│  │    filter_memory(bans) — Python 硬编码:                     │  │
+│  │      保留: f 以 L3|/L4|/L5| 开头 (旧格式高价值)             │  │
+│  │      保留: f 第2段为 test_writer/source (新格式)             │  │
+│  │      丢弃: actor=scheduler 的记忆 (环境问题不持久化)          │  │
+│  │                                                            │  │
+│  │  Step 2: 锚点绑定 (build_anchor_mapping)                    │  │
+│  │    Python 硬编码 — 建立 ban → test_task → dev_task →        │  │
+│  │    contracts 的关联链:                                      │  │
+│  │    1. ban.source_file 提取 test_id                          │  │
+│  │    2. test_task.targetFiles 匹配 dev_task.outputFiles       │  │
+│  │    3. dev_task.requiredContracts → trigger_contracts        │  │
+│  │    4. 递归遍历 dependencies 链 (扩大匹配范围)                 │  │
+│  │    5. 生成 trigger_tags (memory_test/memory_source/smoke)   │  │
+│  │                                                            │  │
+│  │  Step 3: LLM 净化 (localAgent/knowledge_builder)            │  │
+│  │    → run_knowledge_builder("refine", anchored_records)      │  │
+│  │    LLM 对每条 ban 做:                                        │  │
+│  │    - 提取 do (正确做法) / dont (错误做法) / context (场景)    │  │
+│  │    - 分类: category (logic_pitfall/db_ops/api_design/...)   │  │
+│  │    - 评级: severity (high/medium/low)                       │  │
+│  │    - 补全: entity_refs (涉及的实体)                           │  │
+│  │    降级: LLM 失败 → 用原始 ban_text 构造 fallback 记录        │  │
+│  │                                                            │  │
+│  │  Step 4: 去重与合并 (Python + LLM 混合)                      │  │
+│  │    dedup_by_fingerprint() — Python 精确去重:                 │  │
+│  │      同 source_fingerprint → 内容相同跳过 / 不同更新         │  │
+│  │    semantic_dedup() — Python 语义去重:                       │  │
+│  │      向量相似度 ≥ 0.95 → 直接跳过                            │  │
+│  │      向量相似度 0.85~0.95 → review_items → LLM merge         │  │
+│  │    → run_knowledge_builder("merge", {new, similar})          │  │
+│  │      LLM 将两条高度相似的经验合并为一条                        │  │
+│  │                                                            │  │
+│  │  Step 5: 向量化并存储                                        │  │
+│  │    embed_text_batch(texts) — sentence-transformers 批量嵌入  │  │
+│  │    build_embedding_text(rec) — 构造向量文本:                  │  │
+│  │      do + dont + context + trigger_contracts +               │  │
+│  │      trigger_tasks + trigger_tags                           │  │
+│  │    table.merge_insert(on="id") → LanceDB                    │  │
+│  │                                                            │  │
+│  │  Step 6: 创建索引                                            │  │
+│  │    标量索引: source_fingerprint / category / severity (BTREE) │  │
+│  │    向量索引: vector 列 (IVF_PQ, >=256 条时创建)              │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │               存储层 (LanceDB)                               │  │
+│  │                                                            │  │
+│  │  数据库: knowledge/ (本地磁盘)                                │  │
+│  │  表: knowledge_base (构建中间表, 含完整向量)                   │  │
+│  │       knowledge (聚类后检索表, 可选)                          │  │
+│  │                                                            │  │
+│  │  Schema (knowledge_base):                                   │  │
+│  │    id: string                    ← exp_{uuid16}             │  │
+│  │    source_fingerprint: string    ← ban 指纹 (唯一锚点)       │  │
+│  │    do: string                    ← 正确做法                  │  │
+│  │    dont: string                  ← 错误做法                  │  │
+│  │    context: string               ← 场景说明                  │  │
+│  │    trigger_tasks: list[string]   ← 关联的任务 ID             │  │
+│  │    trigger_contracts: list[str]  ← 关联的契约 ID             │  │
+│  │    trigger_tags: list[string]    ← memory_test/source/smoke │  │
+│  │    entity_refs: list[string]     ← 涉及的实体名              │  │
+│  │    severity: string              ← high/medium/low          │  │
+│  │    category: string              ← 经验分类                  │  │
+│  │    source_files: list[string]    ← 来源文件路径              │  │
+│  │    version: int32                ← 版本号 (更新次数)         │  │
+│  │    vector: list[float32]         ← embedding 向量            │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │          检索调度层 (brainAgent/retrieval_scheduler)          │  │
+│  │                                                            │  │
+│  │  retrieval_scheduler(task_id, query, agent_type):           │  │
+│  │                                                            │  │
+│  │  Step 1: 角度分析 (LLM)                                      │  │
+│  │    → run_retrieval_agent("angle_analysis", {query, ...})    │  │
+│  │    输入: "创建订单时如何防止库存超卖?"                         │  │
+│  │    输出: [                                                  │  │
+│  │      {id:"A", name:"正确实现", query:"如何正确实现..."},      │  │
+│  │      {id:"B", name:"边界异常", query:"有哪些边界条件..."},    │  │
+│  │      {id:"C", name:"陷阱防御", query:"有哪些常见陷阱..."}     │  │
+│  │    ]                                                        │  │
+│  │    降级: LLM 失败 → 硬编码 3 个默认角度                       │  │
+│  │                                                            │  │
+│  │  Step 2: 3×3 扩散检索 (Python 硬编码)                        │  │
+│  │    for angle in angles:                                     │  │
+│  │      retrieve_single_angle(task_id, angle.query, top_k=3)   │  │
+│  │        → ExperienceQuery.build_lance_filter()               │  │
+│  │          图约束: array_contains(trigger_contracts, anchor)   │  │
+│  │          标签: memory_test OR memory_source OR smoke         │  │
+│  │        → embed_text(query) → table.search(vector)           │  │
+│  │        → exclude_ids 去重 (不同角度不重复返回同一条)          │  │
+│  │        → 降级: 带合约过滤无结果 → 仅标签过滤重试              │  │
+│  │    deduplicate_results(all, min_similarity=0.55)            │  │
+│  │                                                            │  │
+│  │  Step 3: 结果交付 (LLM)                                      │  │
+│  │    → run_retrieval_agent("deliver", {results, angles, ...}) │  │
+│  │    输出: {summary, delivery, suggestions}                   │  │
+│  │    delivery 按 agent_type 格式化:                            │  │
+│  │      code_generator → prompt_injection 文本                 │  │
+│  │      test_generator → prompt_injection 文本                 │  │
+│  │      test_repair    → structured JSON                      │  │
+│  │      architect      → structured JSON                      │  │
+│  │                                                            │  │
+│  │  Step 4: 缓存写入 (Redis, 可选)                              │  │
+│  │    cache_key = md5(normalized_query|agent_type|top_k)       │  │
+│  │    redis.set(cache_key, json.dumps(result), ex=86400)       │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │              Agent 工具接口层                                │  │
+│  │                                                            │  │
+│  │  search_rag(query)  — RAG 经验检索                          │  │
+│  │    → retrieval_scheduler(task_id, query, agent_type)       │  │
+│  │    → 返回 {ok, summary, content, results_count}            │  │
+│  │    供 code_generator / test_generator / test_repair 等调用  │  │
+│  │                                                            │  │
+│  │  search_code(query) — 高分代码检索                           │  │
+│  │    → code_retrieval.retrieve_code / retrieve_test_code     │  │
+│  │    → 搜索 S/A 级参考实现 (评分≥85)                           │  │
+│  │    供 code_generator / test_writer 等调用                   │  │
+│  └────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### 7.2 上游真理传递
+#### 4.3.2 图锚点缓存机制
 
-```
-工程师阶段:               测试阶段:
-┌──────────────┐         ┌──────────────────────┐
-│ Engineer Truths│───────→│ 注入到 Test Writer    │
-│ (LLM 生成)     │         │ (作为 lower_truths)   │
-│                │         │                      │
-│ infra → db    │         │ 通过后提取 interface  │
-│ db → frontend │         │ → Test Truths         │
-│ frontend →    │         │ → 供下次 ABCD 循环     │
-│   backend     │         └──────────────────────┘
-└──────────────┘
-```
+```python
+# Tools/rag/build/tools.py — 图锚点缓存
 
-- **Engineer Truth**: 代码生成阶段 LLM 主动声明接口（`exposed_to_upper` + `exposed_to_peers`）
-- **Test Truth**: 测试通过后 LLM 精读源码提取，覆盖 Engineer Truth（更精确）
-- 后一步任务通过 prompt_builder 的 `_load_upstream_truths()` 加载上游真理，约束输出
+# 构建时: 从 task.json 加载全部任务 → 建立索引
+_anchor_cache: Dict[str, List[str]] = {}    # task_id → [contract_id, ...]
+_task_graph: Dict[str, dict] = {}           # task_id → {contracts, dependencies}
 
----
+def load_anchor_cache_from_tasks(task_dir: Path):
+    for f in task_dir.glob("task_*.json"):
+        for task in data["tasks"]:
+            _anchor_cache[tid] = task["requiredContracts"]
+            _task_graph[tid] = {"contracts": ..., "dependencies": [...]}
 
-## 8. 依赖图与分层架构
+# 检索时: ExperienceQuery 根据 task_id 查关联契约 → 构建 LanceDB filter
+class ExperienceQuery:
+    def build_lance_filter(self) -> str:
+        anchors = get_anchors_from_task_id(self.task_id, expand_deps=1)
+        # array_contains(trigger_contracts, 'C_order') OR
+        # array_contains(trigger_contracts, 'C_payment') ...
+        # AND (memory_test OR memory_source OR smoke)
 
-### 8.1 分层执行原则
-
-1. **同类型任务必须在连续层中执行** — 提高 LLM system prompt 缓存命中率
-2. **不同类型任务不得在同一层并发** — 避免 prompt 前缀频繁切换
-3. **类型优先于深度** — 确保所有 infra 在一起、所有 db 在一起
-4. **同类型内部按拓扑深度拆分子层** — 有依赖关系的同类型任务拆分
-
-### 8.2 执行顺序
-
-```
-Layer -1: repair        修复层（直接调 engineer，不走 ABCD）
-Layer  0: infra         基础设施（middleware, utils, config, .env）
-Layer  1: db            数据库（DDL, init-db.js）
-Layer  1.5: frontend_static  前端（Vue 页面, Store, API, Router）
-Layer  2: auth          Auth 层
-Layer  3: db_api        数据库 API
-Layer  3.5: peer_deps   同层依赖检查
-Layer  4: api           API 层
-Layer  4.5: backend_proc 后端业务处理
-Layer  5: navigation    导航层
-Layer  6: logic         业务逻辑层
-Layer  7: scenario      场景层
-Layer  8: nfr           非功能需求层
-Layer 99: integration   集成层（单独执行）
+    def get_anchors_for_task(self) -> List[str]:
+        # 展开至直接依赖 (expand_deps=1):
+        #   当前 task 的 contracts + 所有直接依赖 task 的 contracts
+        # 确保检索时覆盖上下游关联契约的经验
 ```
 
-### 8.3 依赖剪枝算法
+#### 4.3.3 向量文本构造策略
 
-```
-节点 A 失败
-  → 递归查找所有通过依赖链到达的节点 B, C, D...
-  → 标记 B, C, D 为 "pruned"
-  → 不执行被剪枝的任务
-  → 输出 failed_tasks.json（区分 root_cause 和 pruned）
-  → 修复顺序: 先修根因 → 根因修复后剪枝自动解除
-```
+```python
+# Tools/rag/build/tools.py — build_embedding_text()
 
----
+def build_embedding_text(record: dict) -> str:
+    """
+    构造用于向量化的文本。设计原则:
 
-## 9. RAG 知识库子系统
+    加入 (核心语义):
+      - do (正确做法) — 自然语言，LLM 查询对齐
+      - dont (错误做法) — 自然语言，LLM 查询对齐
+      - context (场景说明) — 自然语言，LLM 查询对齐
 
-### 9.1 架构概览
+    加入 (结构化锚点):
+      - trigger_contracts 全部 — 业务锚点
+      - trigger_tasks — 任务上下文
+      - trigger_tags — 标签辅助信号 (smoke/memory_test 等)
 
-```
-Memory/test_failure, Memory/source_failure  (失败记忆)
-  │
-  ▼
-[Knowledge Builder] — 6 步流水线
-  │
-  ├─ Step 0: 文件发现 — 扫描目录，分类 memory_files/task_files/source_files
-  ├─ Step 1: 记忆过滤 — 清洗低价值记忆，保留 L3+
-  ├─ Step 2: 锚点绑定 — 构建 测试任务 ↔ 架构任务 双任务映射链
-  ├─ Step 3: LLM 净化 — run_knowledge_builder("refine") 深度经验提炼
-  ├─ Step 4: 去重合并 — 指纹去重 + 语义相似度合并
-  ├─ Step 5: 向量化存储 — SentenceTransformer 嵌入 → LanceDB
-  └─ Step 6: 创建索引
-  │
-  ▼
-knowledge/  (LanceDB 向量数据库)
-  ├── knowledge_base 表    (经验 do/don't 模式)
-  ├── code_base 表         (S/A 级源码)
-  └── test_code_base 表    (S/A 级测试代码)
+    不加入:
+      - source_fingerprint — 机器生成的领域黑话，稀释语义
+      - category — 单字技术代码，不与自然语言查询对齐
+    """
+    parts = []
+    if record.get("do"):    parts.append(record["do"])
+    if record.get("dont"):  parts.append(record["dont"])
+    if record.get("context"): parts.append(record["context"])
+    contracts = record.get("trigger_contracts", [])
+    if contracts: parts.append(" ".join(contracts))
+    tasks = record.get("trigger_tasks", [])
+    if tasks: parts.append(" ".join(tasks))
+    tags = record.get("trigger_tags", [])
+    if tags: parts.append(" ".join(tags))
+    return " ".join(parts)
 ```
 
-### 9.2 检索流程
+#### 4.3.4 记忆生命周期
 
 ```
-Agent 调用 search_rag(query)
-  │
-  ▼
-[Retrieval Scheduler] — 3 步流程
-  │
-  ├─ Step 1: angle_analysis — LLM 将查询分解为 3 个检索角度
-  ├─ Step 2: 3×3 扩散搜索 — 每个角度 × 3 次搜索（不同过滤条件）
-  │            └─ retrieve_single_angle() — LanceDB 向量搜索 + 锚点过滤
-  ├─ Step 3: deliver — LLM 格式化结果（按 agent_type 定制格式）
-  │
-  ▼
-Redis 缓存（24h TTL）→ 相同查询命中缓存
+Agent 执行失败
+    │
+    ▼
+B/D 步骤输出 ban
+    │
+    ├──→ Memory/test_failure/{taskId}.json   (测试问题)
+    └──→ Memory/source_failure/{taskId}.json (源码问题)
+    │
+    ▼
+每轮末 _cleanup_round_failures()
+    ├── passed 任务的 ban → 保留 (有效经验)
+    └── failed 任务的 ban → 删除 (无效经验, 下轮重新诊断)
+    │
+    ▼
+knowledge_builder 定时/按需运行
+    ├── Step 0: 文件发现 (list_files 硬编码目录)
+    ├── Step 1: 过滤 (Python: L3+|test_writer|source 保留)
+    ├── Step 2: 锚点绑定 (Python: ban→test_task→dev_task→contracts)
+    ├── Step 3: LLM 净化 (localAgent: refine, 去噪+结构化)
+    ├── Step 4: 去重 (Python: fingerprint exact + semantic)
+    │           + LLM merge (localAgent: 冲突消解)
+    ├── Step 5: 向量化 (sentence-transformers batch embed)
+    └── Step 6: 索引 (IVF_PQ on LanceDB)
+    │
+    ▼
+Agent 通过 search_rag(query) / search_code(query) 检索
+    → retrieval_scheduler → 角度分析(LLM) → 3×3检索 → 交付格式化(LLM)
+    → Redis 缓存 (24h TTL, 同义查询命中)
 ```
 
-### 9.3 代码检索（双管道）
+#### 4.3.5 检索缓存策略
 
-```
-search_code(query)
-  │
-  ├─ Stage 1: BM25 + 向量混合检索 → 候选集
-  └─ Stage 2: Reranker 重排序 → Top-K
-  │
-  ├── code_base 管道       (源码检索，agent_type ≠ test_*)
-  └── test_code_base 管道  (测试代码检索，agent_type = test_*)
-```
+```python
+# brainAgent/retrieval_scheduler.py — Redis 缓存
 
----
+def _cache_key(query, agent_type, top_k, min_similarity) -> str:
+    # 规范化 query → md5 → 16 位 hex
+    norm = query.strip().lower()[:200]
+    fingerprint = md5(f"{norm}|{agent_type}|{top_k}|{min_similarity:.2f}")
+    return f"rag_cache:{fingerprint}"
 
-## 10. 测试验证子系统（ABCD 循环）
-
-### 10.1 架构
-
-```
-[Test Scheduler] — 13 层 ABCD 循环
-  │
-  ├─ Layer -1 (repair):   直接调 engineer agent 重生成缺失文件
-  ├─ Layer 0 (infra):     静态检查（middleware 导出、config 导出、env 一致性）
-  ├─ Layer 1 (db):        静态对照（DDL vs Model 列名/类型一致性）
-  ├─ Layer 1.5 (frontend_static): 静态检查（SFC 语法、import 路径、命名导出）
-  ├─ Layer 2 (auth):     混合检查
-  ├─ Layer 3 (db_api):    动态测试
-  ├─ Layer 3.5 (peer_deps): 静态检查（同层依赖）
-  ├─ Layer 4 (api):       动态测试
-  ├─ Layer 4.5 (backend_proc): 动态测试
-  ├─ Layer 5 (navigation): 动态测试
-  ├─ Layer 6 (logic):     动态测试
-  ├─ Layer 7 (scenario):  动态测试
-  └─ Layer 8 (nfr):       动态测试
+# 检索流程:
+# 1. 检查 Redis → 命中直接返回 (跳过 LLM 角度分析+交付)
+# 2. 未命中 → 完整检索 → 写入 Redis (TTL=24h)
+# 3. Redis 不可用 → 降级为无缓存模式 (不报错)
 ```
 
-### 10.2 ABCD 循环逻辑
+#### 4.3.6 代码检索 (search_code)
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   ABCD 单次循环                       │
-│                                                       │
-│  A: test_writer   → 生成测试文件                      │
-│       │                                               │
-│       ├─ 语法验证失败 → store_bans(test_failure) → 返回 │
-│       │                                               │
-│       ▼                                               │
-│  B: test_runner   → 运行测试 + 诊断                   │
-│       │                                               │
-│       ├─ total=0 (测试框架问题) → store_bans → 返回    │
-│       ├─ failed=0 + total>0 → ✅ 全部通过 → 返回       │
-│       ├─ failed>0 + fix_target=test → store_bans → 返回│
-│       └─ failed>0 + fix_target=source → 跳到 C        │
-│                                                       │
-│  C: source_fixer  → 修复源码                          │
-│       │                                               │
-│       ├─ 语法验证 → 失败则返回                          │
-│       └─ 保存源码快照 (Redis/文件) → 跳到 D            │
-│                                                       │
-│  D: test_runner   → 验证修复                          │
-│       │                                               │
-│       ├─ total=0 / failed>0 → store_bans → 返回       │
-│       └─ failed=0 → ✅ 全部通过 → 提取真理 → 评分入库  │
-│                                                       │
-│  每轮最多 3 次尝试 (max_attempts=3)                    │
-│  尝试用尽且测试仍失败 → 删除测试文件 → 回滚到最佳版本   │
-└─────────────────────────────────────────────────────┘
+```python
+# Tools/rag/search_code.py — 双路由代码检索
+
+def make_search_code(task_id, agent_type):
+    _is_test = agent_type in ("test_writer", "test_generator")
+
+    async def search_code(query: str) -> dict:
+        if _is_test:
+            # 查测试代码库 → 找高分测试参考 (≥85 分)
+            results = await retrieve_test_code(task_id, query,
+                            top_k=3, min_test_score=85)
+        else:
+            # 查源码库 → 找高分实现参考 (≥85 分)
+            results = await retrieve_code(task_id, query,
+                            top_k=3, min_code_score=85)
+        return {"ok": True, "results": simplified, ...}
 ```
 
-### 10.3 Redis 快照与回滚
+与 `search_rag` (查历史经验) 不同，`search_code` 查询的是**代码评分系统**产出的高分参考实现 (S/A 级)，帮助 Agent 了解"好的代码长什么样"。
 
-- **快照**: 每次 Step C 执行前，保存当前源码的 MD5 哈希 → 文件/Redis
-- **最佳版本**: 每次测试完全通过时，更新 best_score + best_hash
-- **回滚**: 所有尝试用尽且仍失败时，恢复 best_hash 对应的源码快照
-- **降级**: Redis 不可用时，降级为 `Memory/snapshots/` 文件快照
+### 4.3 真理 (Truth) 管理
 
-### 10.4 禁令系统（Ban System）
+真理文件是 Agent 间传递接口信息的唯一机制：
 
 ```
-禁令指纹格式: {layer}|{source}|{category}|{type}
-  e.g.: "infra|middleware|middleware/auth.js|MISSING"
-
-禁令指令格式: "DON'T: {具体错误} | fix: {修复方向} | {test_subdir}"
-  e.g.: "DON'T: 未导出 authenticate | fix: 添加 module.exports.authenticate | test/unit"
-
-存储位置:
-  Memory/test_failure/{task_id}.json    — 测试禁令
-  Memory/source_failure/{task_id}.json  — 源码禁令
-
-注入方式:
-  - A 步: test_bans → 避免重复生成相同错误的测试
-  - C 步: source_bans → 避免重复犯相同错误的源码
+Memory/truths/
+├── engineer/              # 工程师真理 (代码生成阶段产出)
+│   ├── t_infra_01.json    # infra 任务真理 (package.json 导出清单)
+│   ├── t_db_users.json    # db 任务真理 (表结构+种子数据描述)
+│   ├── t_backend_auth.json# backend 任务真理 (API 签名+错误码)
+│   └── t_frontend_home.json # frontend 任务真理 (组件导出+路由)
+│
+└── test/                  # 测试真理 (ABCD 循环 D 步骤产出)
+    └── t_auth_001.json    # D 验证通过后的真理
 ```
 
----
-
-## 11. 运行时数据与存储
-
-| 路径 | 内容 | 格式 |
-|------|------|------|
-| `knowledge/` | LanceDB 向量数据库（3 张表） | LanceDB |
-| `Memory/chat_sessions/{id}/full_memory.json` | PM 完整讨论记录 | JSON |
-| `Memory/chat_sessions/{id}/full_summary.json` | PM 累计摘要 | JSON |
-| `Memory/test_failure/{task_id}.json` | 测试禁令 | JSON array |
-| `Memory/source_failure/{task_id}.json` | 源码禁令 | JSON array |
-| `Memory/test_logs/{task_id}.json` | 任务测试状态 | JSON |
-| `Memory/truths/engineer/{task_id}.json` | Engineer 真理 | JSON |
-| `Memory/truths/test/{task_id}.json` | Test 真理 | JSON |
-| `Memory/agent_logs/engineer/{tid}/` | 工程师 Agent 日志 | .md + .json |
-| `Memory/agent_logs/test/{tid}/attempt_{n}/` | 测试 Agent 日志 | .md + .json |
-| `Memory/logs/agent_YYYYMMDD.log` | 系统日志 | 文本 |
-| `Memory/snapshots/snap_{tid}_{hash}.json` | 源码快照 | JSON |
-| `Memory/snapshots/best_{tid}.json` | 最佳版本元数据 | JSON |
-| `work/project/` | 生成的项目代码 | 源码 |
-| `work/project/task/task_*.json` | 架构计划 | JSON |
-| `work/project/test/test_tasks_*.json` | 测试计划 | JSON |
-| `work/project/doc/requirement_report_*.md` | PRD 报告 | Markdown |
-| `work/project/report/execution_report_*.json` | 执行报告 | JSON |
-| `work/project/.meta/` | 任务元数据 + failed_tasks.json | JSON |
-
----
-
-## 12. 接口真理（Truth）系统
-
-### 12.1 两层真理
-
-| 类型 | 生成阶段 | 生成方式 | 存储位置 |
-|------|----------|----------|----------|
-| **Engineer Truth** | 代码生成 (Step 3) | LLM 主动声明（`_extract_exposed_interface`）+ 正则回退 | `Memory/truths/engineer/` |
-| **Test Truth** | 测试验证 (Step 4) | 测试通过后 LLM 精读源码提取 + 正则回退 | `Memory/truths/test/` |
-
-### 12.2 接口结构
-
-每种 Agent 类型有专属的两层接口：
-
+真理 JSON 结构：
 ```json
 {
-  "exposed_to_upper": {
-    // infra: middleware[], utils_exports[], config_exports[], env_vars_used[]
-    // db: tables[] (含 fields/indexes/foreignKeys)
-    // frontend: pages[], api_calls[], router{}
-    // backend: routes[] (含 handlers/middleware/request/response)
-  },
-  "exposed_to_peers": {
-    // infra: internal_exports[] (同层 import 依赖)
-    // db: cross_table_refs[]
-    // frontend: stores[] (含 state/actions/getters/imported_by)
-    // backend: services[], cross_task_imports[]
+  "task_id": "t_backend_order_01",
+  "type": "backend",
+  "output_files": ["routes/orderRoutes.js", "controllers/orderController.js"],
+  "description": "订单 CRUD API",
+  "exposed": {
+    "exposed_to_upper": {
+      "POST /api/orders": {
+        "handler": "createOrder",
+        "auth": "authenticate",
+        "request": { "body": ["productId", "quantity", "addressId"] },
+        "response": { "orderId": "number", "status": "string" }
+      }
+    },
+    "exposed_to_peers": {
+      "createOrder": { "file": "controllers/orderController.js", "line": 12 }
+    }
   }
 }
 ```
 
-### 12.3 真理传递链
+---
+
+## 第五章：工具系统设计
+
+### 5.1 工具分层
 
 ```
-PrompBuilder._load_upstream_truths()
-  │
-  ├─ 从 Memory/truths/engineer/*.json 加载
-  ├─ 按 agent_type 白名单过滤（如 backend 看 infra + db + frontend）
-  ├─ 下层 → exposed_to_upper（上层需要知道的接口）
-  ├─ 同层 → exposed_to_peers（同层 import 依赖）
-  │
-  ▼
-编排到 system prompt 的 "上游真理" 部分
-  → Agent 被告知: "以下接口已被测试验证为正确，不可质疑。"
+┌────────────────────────────────────────────────────────────┐
+│                     工具分层架构                            │
+│                                                            │
+│  ┌──────────────────────────────────────────────────┐     │
+│  │           Agent 工具 (被 Agent 调用的 FunctionTool) │     │
+│  │                                                    │     │
+│  │  代码操作: create_files / edit_batch / read_file    │     │
+│  │           list_files / syntax_check / quick_check   │     │
+│  │  测试:     agent_run_test / npm_install             │     │
+│  │  记忆:     save_memory / load_memory / ban_memory   │     │
+│  │  检索:     search_rag / search_code                │     │
+│  │  技能:     load_skill                              │     │
+│  └──────────────────────────────────────────────────┘     │
+│                                                            │
+│  ┌──────────────────────────────────────────────────┐     │
+│  │         Python 调度工具 (被 scheduler 调用)         │     │
+│  │                                                    │     │
+│  │  DDL vs 契约对比 / 种子数据检查 / CJS 链检查         │     │
+│  │  npm 依赖检查 / Vite 构建检查 / 死路由检查           │     │
+│  │  端点覆盖检查 / UI 色板检查 / 路由注册验证            │     │
+│  │  全链加载测试 / 循环依赖检测                         │     │
+│  └──────────────────────────────────────────────────┘     │
+│                                                            │
+│  ┌──────────────────────────────────────────────────┐     │
+│  │           基础设施工具 (被各层共用)                  │     │
+│  │                                                    │     │
+│  │  model_client (LLM 客户端单例)                      │     │
+│  │  token_tracker (Token 消耗追踪)                     │     │
+│  │  dependency_graph (DAG 分层)                        │     │
+│  │  json_extractor (JSON 解析)                         │     │
+│  │  logger (统一日志)                                   │     │
+│  └──────────────────────────────────────────────────┘     │
+└────────────────────────────────────────────────────────────┘
 ```
 
-### 12.4 真理一致性验证
+### 5.2 工具包装器模式
 
-`_validate_truth_consistency()`: LLM 声明的接口 vs 正则扫描实际文件的接口 → 交叉比对 → 不一致时输出 warning 日志（但不阻断执行，以 LLM 声明的为准）。
+所有 Agent 工具通过工厂函数创建，实现**白名单校验 + 次数限制 + 状态锁**：
 
----
+```python
+# agent/base_designer.py — 工具包装模式
 
-## 13. 评分系统
+def _make_create_files_wrapper(target_files, abs_workspace, workspace_path,
+                                _close_step1, _file_tool_calls):
+    _allowed = set(target_files)      # 白名单 — 只能创建 outputFiles
+    MAX_FILE_CALLS = 2                # create + edit 合计上限
 
-### 13.1 源码评分 (`score_code`)
+    async def create_files(files, metadata=None):
+        _close_step1()                # 关闭 Step 1 (禁止 search_rag/code)
+        _file_tool_calls[0] += 1      # 计数 +1
 
-| 维度 | 权重 | 说明 |
-|------|------|------|
-| 测试通过率 | 30% | `passed / total` |
-| 任务完成度 | 25% | 目标文件是否全部存在且非空 |
-| 测试覆盖率 | 20% | 测试文件覆盖的源码文件比例 |
-| 代码质量 | 15% | 禁令数、文件大小合理性 |
-| 记忆修复率 | 10% | 历史禁令在本轮是否已修复 |
+        # 白名单校验 — 禁止创建 outputFiles 之外的文件
+        for f in files:
+            if f["path"] not in _allowed:
+                return {"error": f"禁止创建 '{f['path']}'", ...}
 
-### 13.2 测试代码评分 (`score_test_code`)
+        result = await _create_files(files, ...)
 
-| 维度 | 权重 | 说明 |
-|------|------|------|
-| Mock 完整性 | 30% | 需 mock 的依赖是否全部覆盖 |
-| 断言质量 | 25% | 断言数量、expect 覆盖率 |
-| 场景覆盖 | 20% | 测试场景 vs 源码场景匹配度 |
-| 框架合规 | 15% | Jest/Vitest 语法规范 |
-| 语法 | 10% | 语法无误 |
+        # 自动触发语法检查 + 完整性检查
+        qc = await _quick_check(created, workspace=abs_workspace)
+        result["quick_check"] = qc
 
-### 13.3 自动入库
+        # 动态生成下一步指令
+        if still_missing:
+            result["🛑_NEXT"] = f"还有 {len(still_missing)} 个文件未创建 → 补建"
+        elif qc_ok:
+            result["🛑_NEXT"] = "全部完成！输出真理 JSON"
+        else:
+            result["🛑_NEXT"] = "有语法问题 → edit_files 修 1 次"
+        return result
 
-- 源码总分 ≥ 90 → 存入 `knowledge/code_base`
-- 测试代码总分 ≥ 90 → 存入 `knowledge/test_code_base`
-- 这是"左脑数据来源"——只有经过测试验证的高质量代码才进入知识库
-
----
-
-## 14. 外部依赖
-
-### 14.1 Python 包
-
-| 包 | 用途 |
-|------|------|
-| `picoagents` | Agent 框架（Agent 创建、流处理、工具调度） |
-| `openai` | OpenAI-compatible API 客户端（DeepSeek） |
-| `python-dotenv` | .env 文件加载 |
-| `redis` (redis.asyncio) | Redis 缓存（可选，降级为文件） |
-| `lancedb` | 向量数据库 |
-| `sentence-transformers` | 文本嵌入（Qwen3-Embedding-4B） |
-| `FlagEmbedding` | 重排序模型（Qwen3-Reranker-4B） |
-
-### 14.2 外部服务
-
-| 服务 | 用途 | 地址 | 是否必需 |
-|------|------|------|----------|
-| DeepSeek API | LLM 推理 | `https://api.deepseek.com` | ✅ 必需 |
-| Redis | 缓存 | `redis://localhost:6379/0` | ❌ 可选（文件降级） |
-| MySQL | 项目数据库 | `localhost:3306` | ❌ 仅测试时 |
-| llama-server | 本地 LLM | `http://localhost:3002` | ❌ 可选 |
-
-### 14.3 目标项目依赖（自动安装）
-
-- **后端**: express, mysql2, jsonwebtoken, bcryptjs, cors, dotenv, express-validator
-- **前端**: vue 3, vite, pinia, axios, vue-router
-- **测试**: jest, vitest, @vue/vue3-jest, jest-environment-jsdom
+    return create_files
+```
 
 ---
 
-## 15. 关键设计模式
+## 第六章：Prompt 工程设计
 
-### 15.1 模板方法模式 (BaseDesigner)
+### 6.1 缓存优先的组装策略
 
-`BaseDesigner` 定义主流程骨架，子类覆写钩子方法：
-- `_has_json_retry()` — 是否 JSON 重试
-- `_build_result()` — 构建返回值
-- `_get_target_files()` — 获取目标文件
+```
+System Prompt 固定顺序 (最大化跨 task 缓存命中):
 
-### 15.2 策略模式 (Prompt Builder)
+位置 0-2:  5 种 Agent 完全共享 → 缓存命中
+  quality.md + readability.md + workflow.md
 
-`build_user_prompt()` 根据 `agent_type` 选择不同的契约过滤策略和真理模板。
+位置 3-4:  某类型共享 → 同类型 task 间缓存命中
+  场景树 + Agent 专属 skill
 
-### 15.3 分层并发 + 剪枝
+位置 5-6:  某类型内部分共享 → 部分缓存命中
+  UI 风格文档 (仅前端)
 
-同类型任务并发执行（缓存友好），上游失败递归剪枝下游（避免无效计算）。
+位置 7:    本 task 专属 → 无缓存
+  上游真理 + 环境约束
 
-### 15.4 禁令记忆 (Ban Memory)
+User Prompt: 全部动态 → 无缓存，但 token 量少
+  任务 JSON + 关联契约 + 真理模板
+```
 
-失败经验以 `(fingerprint, prohibition)` 对存储，注入到后续 Agent 的 prompt 中，防止重复犯错。
+### 6.2 Monkey-patch 兼容性修复
 
-### 15.5 LLM 主生成 + Python 正则回退
+DeepSeek API 不兼容 JSON Schema 中的 `"description": null`，通过 monkey-patch 修复：
 
-真理提取优先使用 LLM 精读源码（高质量但不保证输出），Python 正则扫描作为回退（100% 可靠但信息有限）。
+```python
+# agent/architect.py
+_orig_build_params = FunctionTool._build_parameters_schema
 
-### 15.6 Redis + 文件双写缓存
+def _patched_build_params(self) -> dict:
+    schema = _orig_build_params(self)
+    for prop in schema.get("properties", {}).values():
+        for key in list(prop.keys()):
+            if prop[key] is None:
+                del prop[key]
+    return schema
 
-Redis 可用时使用 Redis（带 TTL），不可用时降级为 JSON 文件。写操作同时写两份。
-
-### 15.7 降级策略
-
-- PM Agent 未产出 PRD → 从 `full_summary.json` 自动生成
-- Redis 不可用 → 文件快照（`Memory/snapshots/`）
-- LLM 接口提取失败 → 正则扫描回退
-- LLM 净化失败 → 使用原始数据
-- 测试任务文件缺失 → 降级使用最新文件
-- npm install 缺失包 → 自动安装
-
----
-
-## 16. 错误处理与容错
-
-### 16.1 各阶段的容错
-
-| 阶段 | 错误处理 |
-|------|----------|
-| PM 讨论 | 单轮超时/异常 → 继续下一轮 |
-| PM final_output | 超时/异常 → 降级 PRD |
-| 架构设计 | 关键字段缺失 → 阻断执行（抛 ValueError） |
-| 代码生成 | 单任务失败 → 剪枝下游 → 记录到 failed_tasks.json |
-| JSON 解析错误 | 自动重试一次（带明确的修复方向） |
-| Agent 流异常 | 捕获 ErrorEvent/FatalErrorEvent → 记录错误文本 |
-| 测试执行 | 失败 ≤3 次重试 → 回滚到最佳版本 |
-| npm install 失败 | 忽略，后续测试可能仍通过 |
-| Redis 不可用 | 降级为文件快照 |
-| 语法检查失败 | 不阻断，记录错误列表 |
-
-### 16.2 循环依赖保护
-
-`dependency_graph.py` 中拓扑排序有最大迭代次数保护（`len(tasks) * 10`），超过后抛出 `ValueError` 并列出可能的循环依赖节点。
-
-### 16.3 Token 追踪
-
-所有 Agent 流通过 `wrap_agent_stream()` 包装，实时估算 Token 消耗并保存报告，避免超出上下文窗口。
+FunctionTool._build_parameters_schema = _patched_build_params
+```
 
 ---
 
-## 附录 A: 关键文件索引
+## 第七章：并发与调度设计
 
-| 文件 | 角色 | 行数 |
-|------|------|------|
-| [agent/base_designer.py](agent/base_designer.py) | 所有工程 Agent 基类 | ~450 |
-| [agent/prompt_builder.py](agent/prompt_builder.py) | 统一提示词组装 | ~350 |
-| [brainAgent/basic.py](brainAgent/basic.py) | 统一入口 | ~290 |
-| [brainAgent/scheduler.py](brainAgent/scheduler.py) | 测试调度器（ABCD 循环） | ~1390 |
-| [brainAgent/engineer.py](brainAgent/engineer.py) | 工程调度器（分层并发） | ~415 |
-| [brainAgent/knowledge_builder.py](brainAgent/knowledge_builder.py) | 知识库构建（6 步） | ~360 |
-| [brainAgent/orchestrator.py](brainAgent/orchestrator.py) | 需求分析编排 | ~130 |
-| [utils/dependency_graph.py](utils/dependency_graph.py) | 依赖图分层 | ~176 |
-| [agent/architect.py](agent/architect.py) | 架构师 Agent | ~400+ |
-| [agent/product_manager.py](agent/product_manager.py) | PM Agent | ~300+ |
-| [agent/test_writer.py](agent/test_writer.py) | 测试编写（Step A） | ~400+ |
-| [agent/test_runner.py](agent/test_runner.py) | 测试诊断（Step B+D） | ~500+ |
-| [agent/source_fixer.py](agent/source_fixer.py) | 源码修复（Step C） | ~300+ |
-| [Tools/rag/build/tools.py](Tools/rag/build/tools.py) | RAG 构建工具 | ~400+ |
-| [Tools/rag/code_retrieval/code_retrieval.py](Tools/rag/code_retrieval/code_retrieval.py) | 代码检索 | ~300+ |
-| [Tools/scoring/code_scorer.py](Tools/scoring/code_scorer.py) | 代码评分 | ~200+ |
+### 7.1 并发模型
 
-## 附录 B: CLI 用法
+```
+全局并发控制:
+  MAX_CONCURRENT_TASKS = 100  (asyncio.gather 自然上限)
+
+engineer 阶段:
+  层间: 串行 (保证依赖顺序)
+    Layer 0: infra ────────────→
+    Layer 1: db ───────────────→
+    Layer 2: frontend ─────────→
+    Layer 3: backend ─────────→
+    Layer 4: integration ──────→
+
+  层内: 同类型任务并发 (asyncio.gather)
+    ┌─ t_infra_01 ─┐
+    ├─ t_infra_02 ─┤─── asyncio.gather ───→ 全部完成后进入下一层
+    ├─ t_infra_03 ─┤
+    └─ t_infra_04 ─┘
+
+  剪枝: 上游失败 → 依赖该上游的任务直接标记为 pruned
+
+scheduler 阶段:
+  同 testType 同 layer 内并发
+  ├── 静态层特例: 共享 targetFiles 的任务通过信号量控制
+  └── 接口/逻辑/质量层: ABCD 循环 + 双层屏障
+```
+
+### 7.2 文件冲突处理
+
+```
+engineer 阶段文件冲突检测 (_report_file_conflicts):
+
+同类型重叠 → ⚠️ 文件锁控制 (同层并发时通过信号量串行化)
+  例: t_infra_01 和 t_infra_02 都写 package.json
+
+跨类型重叠 → ✅ 允许 (不同层顺序执行，不会并发冲突)
+  例: t_db_users 创建 database/schema/users.sql
+       t_integration 读取 database/schema/users.sql 生成 init-db.js
+```
+
+### 7.3 状态持久化与恢复
+
+```python
+# brainAgent/engineer.py — 任务状态持久化
+class EngineerTaskState:
+    task_id: str
+    success: bool
+    output_files: list
+    timestamp: str
+    error: str
+
+# 保存: Memory/agent_logs/engineer/states/{task_id}.json
+_save_engineer_state(state)
+
+# 恢复模式: --resume
+# 1. 加载状态 → is_done=True → 验证 outputFiles 存在且非空 → 跳过
+# 2. is_done=True 但文件缺失 → 清除状态 → 重新执行
+
+# scheduler 阶段:
+class TaskTestState:
+    test_success: bool
+    source_success: bool
+    attempt: int
+    done: bool
+    best_score: float
+
+# 保存: Memory/test_logs/{task_id}.json
+```
+
+---
+
+## 第八章：Token 经济系统
+
+### 8.1 双轨 Token 追踪
+
+```
+TokenTracker (utils/token.py) — 非侵入式旁路观测:
+
+┌─────────────────────────────────────────────────────┐
+│  API 轨道 (精确):                                    │
+│  - 从 AssistantMessage.usage 提取每轮 LLM 调用的      │
+│    tokens_input / tokens_output                      │
+│  - AgentResponse.context.messages 提供 per-call 数据  │
+│  - 增量计算避免重复累计                               │
+│                                                     │
+│  估算轨道 (补充):                                    │
+│  - 中文字符 / 1.5 ≈ tokens                          │
+│  - 英文字符 / 4 ≈ tokens                            │
+│  - 覆盖 API usage 未报告的内容 (prompt 上下文)        │
+└─────────────────────────────────────────────────────┘
+
+输出: token/{category}/{timestamp}_{task_id}.json
+  - summary: 总输入/输出 token + 估算费用
+  - llm_calls: 每次 LLM 调用的详细消耗
+  - tool_executions: 每次工具调用的结果预览
+```
+
+### 8.2 阶段级余额追踪
+
+```python
+# utils/token_tracker.py — 5 阶段余额追踪
+record_stage("需求分析", phase="start")   # 阶段开始快照
+record_stage("需求分析", phase="end")     # 阶段结束快照 → 自动计算 cost
+
+# 阶段名称 (5 个):
+#   需求分析 / 架构任务生成 / 源代码生成 / 测试任务生成 / 测试与修复
+
+# 每阶段开始和结束时查询 DeepSeek 余额 API
+# 阶段消耗 = start_total - end_total
+# 持久化: Memory/token/{阶段名}.json (含历史序列)
+```
+
+---
+
+## 第九章：关键数据结构
+
+### 9.1 架构任务 (task.json)
+
+```json
+{
+  "meta": {
+    "generatedAt": "2026-07-17T12:00:00",
+    "prdSource": "requirement_report_*.md",
+    "pipeline": "plan_tree->data->interfaces->business->tasks"
+  },
+  "contracts": {
+    "model": [{ "contractId": "M_order", "tableName": "orders", "fields": [...] }],
+    "auth": [{ "contractId": "A_jwt", "tokenConfig": {...} }],
+    "api": [{ "contractId": "API_order_crud", "basePath": "/api/orders", "endpoints": [...] }],
+    "db-api": [{ "contractId": "DBA_order_insert", "operation": "INSERT", "tableName": "orders" }],
+    "navigation": [{ "contractId": "NAV_home_to_products", "fromPageFile": "Home.vue", "toPageFile": "Products.vue" }],
+    "scenario": [{ "contractId": "SCO_checkout", "chain": [...], "priority": "P0" }],
+    "logic": [{ "contractId": "LOG_create_order", "serviceSignature": "async createOrder(req, res)", "process": [...], "transactionBoundary": "REQUIRED" }]
+  },
+  "tasks": [
+    {
+      "taskId": "t_infra_01",
+      "type": "infra",
+      "dependencies": [],
+      "outputFiles": ["package.json", "config/db.js", "middleware/auth.js", ...],
+      "usesContracts": [],
+      "description": "项目初始化：package.json、数据库配置、JWT 中间件、日志、统一响应"
+    }
+  ]
+}
+```
+
+### 9.2 测试任务 (test_tasks.json)
+
+```json
+{
+  "meta": { "generatedAt": "...", "pipeline": "plan_tree->static->interface->logic->quality" },
+  "testTasks": [
+    {
+      "id": "t_auth_001",
+      "layer": "auth",
+      "testType": "interface",
+      "sourceTask": "t_backend_auth_01",
+      "targetFiles": ["middleware/auth.js"],
+      "dependencies": ["t_infra_01"],
+      "testFramework": "jest",
+      "checkPoints": ["导出 authenticate", "导出 optionalAuth", "Token 过期 → 401"],
+      "testScenarios": [
+        {"category": "correct", "scenario": "有效 token → 200", "expectedBehavior": "返回用户信息"},
+        {"category": "error", "scenario": "过期 token → 401", "expectedBehavior": "返回认证失败"},
+        {"category": "boundary", "scenario": "无 token → 401", "expectedBehavior": "返回未认证"}
+      ]
+    }
+  ]
+}
+```
+
+### 9.3 测试状态 (test_logs)
+
+```json
+{
+  "task_id": "t_auth_001",
+  "test_success": true,
+  "source_success": true,
+  "test_file_path": "test/t_auth_001.test.js",
+  "attempt": 3,
+  "done": true,
+  "best_score": 0.95,
+  "best_attempt": 2,
+  "state": "(TS, SS)"
+}
+```
+
+---
+
+## 第十章：错误处理与容错
+
+### 10.1 多层容错策略
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  Layer 1: API 错误重试                                      │
+│  - base_designer: API 错误自动重试 1 次 (新 Agent 实例)     │
+│  - model_client: httpx 超时 + 1 次重试                      │
+│  - Monkey-patch: DeepSeek 兼容性修复 (null description)     │
+│                                                            │
+│  Layer 2: Agent 输出解析回退                                 │
+│  - 策略 1: <!--FINAL--> 双标记 JSON (最可靠)                │
+│  - 策略 2: 单标记 + 括号深度追踪                             │
+│  - 策略 3: 双标记之间全文搜索 JSON                            │
+│  - 策略 4: 文本格式 ban (f=...|b=...)                       │
+│  - 策略 5: 回退结果 (测试结果数字 → 构造默认 ban)            │
+│                                                            │
+│  Layer 3: 调度器容错                                        │
+│  - 任务失败 → 标记 failed → 剪枝下游                         │
+│  - 状态持久化 → 恢复模式跳过已完成任务                        │
+│  - 多轮 ABCD → 无进展检测 (passed <= prev_passed → 停止)     │
+│                                                            │
+│  Layer 4: 确定性修复                                        │
+│  - 路由自动注入 (app.js 缺路由 → Python 扫描 routes/ → 注入)  │
+│  - 多路由展开 (module.exports = {a,b} → 分别 app.use)       │
+│  - 死路由清理 (router/index.js 不存在 .vue → 注释)          │
+│  - env 补全 (代码 scan → 缺失变量 → .env 追加)               │
+└────────────────────────────────────────────────────────────┘
+```
+
+### 10.2 JSON 提取多层回退
+
+```python
+# agent/source_fixer.py — _extract_structured()
+def _extract_structured(text: str) -> tuple:
+    """4 层回退策略:"""
+
+    # 策略 1: <!--FINAL-->[...]<!--FINAL--> 或 {...} 双标记
+    for m in re.finditer(r'<!--FINAL-->\s*(\[.*?\]|\{.*?\})\s*<!--FINAL-->', tail):
+        data = try_parse(m.group(1))
+        if valid(data): return (None, data) if list else (data, None)
+
+    # 策略 2: 单标记 + 括号深度追踪 (处理 LLM 忘记闭合标记)
+    for m2 in re.finditer(r'<!--FINAL-->\s*([\[\{])', tail):
+        # 从起始括号追踪到匹配的闭合括号
+
+    # 策略 3: 双标记之间全文搜索 JSON
+    for m3 in re.finditer(r'<!--FINAL-->(.*?)<!--FINAL-->', tail):
+        # 在 inner 中搜索所有 JSON 块，取最后一个有效项
+
+    # 策略 4: 文本格式 fallback
+    for fm in re.finditer(r'[fF]\s*=\s*(.+?)\s*\|\s*[bB]\s*=\s*(.+?)(?:\n|$)', tail):
+        bans.append({"f": f_val, "b": b_val})
+```
+
+---
+
+## 第十一章：系统配置
+
+### 11.1 环境变量体系
 
 ```bash
-# 全流程（从需求到测试验证）
-python brainAgent/basic.py "设计一个医院预约挂号系统"
+# .env.example — 完整配置
 
-# 只跑需求分析
-python brainAgent/basic.py -orchestrator "设计一个在线教育平台"
+# ── LLM 配置 ──
+OPENAI_API_KEY="sk-xxx"                    # DeepSeek API Key
+OPENAI_BASE_URL="https://api.deepseek.com"  # API 地址
+OPENAI_MODEL="deepseek-v4-pro"             # 模型
+DEEPSEEK_BALANCE_URL="https://api.deepseek.com/user/balance"
 
-# 从架构设计开始（跳过需求分析）
-python brainAgent/basic.py -architect --requirement-report work/project/doc/requirement_report_xxx.md
+# ── 本地 LLM (可选) ──
+LOCAL_OPENAI_API_KEY="111"                # 本地不需要真实密钥
+LOCAL_OPENAI_BASE_URL="http://localhost:3002/completion"
+LOCAL_OPENAI_V1_URL="http://localhost:3002/v1"
+LOCAL_OPENAI_MODEL="Qwopus3.5-4B-coder-Q4_K_M.gguf"
+LOCAL_CTX_SIZE=32768
+LOCAL_TIMEOUT=600
+LOCAL_MAX_TOKENS=4096
 
-# 从代码生成开始（跳过需求+架构）
-python brainAgent/basic.py -engineer --task-file work/project/task/task_xxx.json
+# ── HTTP 超时 ──
+HTTP_CONNECT_TIMEOUT=10
+HTTP_READ_TIMEOUT=120
+HTTP_WRITE_TIMEOUT=30
+HTTP_POOL_TIMEOUT=10
+HTTP_MAX_RETRIES=1
 
-# 从测试开始（跳过需求+架构+代码）
-python brainAgent/basic.py -test --fast
+# ── RAG ──
+RAG_EMBEDDING_MODEL="Qwen/Qwen3-Embedding-4B"
+RAG_RERANKER_MODEL="Qwen/Qwen3-Reranker-4B"
+RAG_CHUNK_SIZE=800
+RAG_CHUNK_OVERLAP=80
+RAG_TABLE="knowledge"
+RAG_BUILD_TABLE="knowledge_base"
 
-# 指定最大讨论轮数
-python brainAgent/basic.py "需求" --max-rounds 5
+# ── 数据库 ──
+DB_HOST="localhost"
+DB_PORT="3306"
+DB_USER="root"
+DB_PASSWORD="xxx"
+DB_NAME="testdb"
 
-# 知识库构建
-python brainAgent/knowledge_builder.py
-> build Memory/test_failure,Memory/source_failure,work/project/test,work/project/task
+# ── 缓存 ──
+REDIS_URL="redis://localhost:6379/0"
+RAG_CACHE_TTL=86400
 
-# 测试调度器独立运行
-python brainAgent/scheduler.py ./work/project ./work/project/test/test_tasks_xxx.json
+# ── 服务 ──
+PORT="3000"
+```
+
+### 11.2 Python 依赖
+
+```
+picoagents          # Agent 框架 (含 LLM 客户端 + 流式处理 + 工具系统)
+python-dotenv       # .env 加载
+lancedb             # 向量数据库 (RAG)
+pyarrow             # Arrow 数据格式 (LanceDB 依赖)
+sentence-transformers # Embedding 模型
+numpy               # 数值计算
+redis               # 缓存 (可选)
 ```
 
 ---
 
-> **文档生成**: 基于 2026-06-29 完整代码扫描。  
-> **维护**: 当系统架构变更时，请同步更新本文档。
+## 第十二章：系统性能特征
+
+| 指标 | 值 | 说明 |
+|------|------|------|
+| Agent 最大迭代次数 | 3-7 | 按任务复杂度动态设定 |
+| 最大并发任务数 | 100 | asyncio.gather 自然上限 |
+| 单次 LLM 调用最大 ctx | ~128K | DeepSeek 模型上下文窗口 |
+| System Prompt 缓存命中率 | >60% | 共享 skill 固定在前 |
+| 语法检查超时 | 15s | node --check / esbuild |
+| Vite 构建超时 | 120s | 前端的完整构建 |
+| npm install 超时 | 600s | 首次安装可能较慢 |
+| 全量测试超时 | 300s | jest --json --forceExit |
+| MySQL 连接超时 | 5s | db_api 层服务检查 |
+| Token 追踪开销 | 0 | 纯旁路观测，无额外 LLM 调用 |
+
+---
+
+## 附录 A：文件命名规范
+
+| 路径模式 | 说明 |
+|---------|------|
+| `Memory/agent_logs/{category}/{run_id}/{idx}_{step}.md` | Agent 对话实录 |
+| `Memory/agent_logs/{category}/{task_id}/{step}_{name}.md` | 步骤日志 |
+| `Memory/truths/engineer/{taskId}.json` | 工程师真理文件 |
+| `Memory/test_failure/{taskId}.json` | 测试失败 ban |
+| `Memory/source_failure/{taskId}.json` | 源码失败 ban |
+| `Memory/test_logs/{taskId}.json` | 测试状态 |
+| `Memory/architect/_contracts_{layer}.json` | 架构师中间契约 |
+| `Memory/test_architect/_test_{layer}.json` | 测试架构师中间产物 |
+| `work/project/doc/requirement_report_{session}_{ts}.md` | PRD 报告 |
+| `work/project/task/task_{ts}.json` | 架构任务文件 |
+| `work/project/task/_scene_tree.md` | 场景树 |
+| `work/project/test/test_tasks_{ts}.json` | 测试任务文件 |
+| `work/project/test/{taskId}.test.js` | 测试代码 |
+| `token/{category}/{ts}_{taskId}.json` | Token 报告 |
+
+## 附录 B：关键类型映射
+
+```
+engineer type → test layer 映射 (_LAYER_TO_TYPE):
+  infra/repair    → static
+  db              → static
+  frontend        → static
+  peer_deps       → static
+  integ           → static
+  auth            → interface
+  db_api          → interface
+  api             → interface
+  navigation      → interface
+  backend_proc    → logic
+  logic           → logic
+  scenario        → logic
+  nfr             → quality
+
+engineer type 执行优先级:
+  infra (0) > db (1) > frontend (2) > backend (3) > integration (4)
+
+test type 执行优先级:
+  static (0) > interface (1) > logic (2) > quality (3)
+```

@@ -2,19 +2,21 @@
 """
 统一入口：从一句话需求到完整可运行系统的自动化流程。
 
-流程:
-  1. 需求分析 (orchestrator)   → requirement_report_*.md
-  2. 架构设计 (architect)      → task_*.json (含契约)
-  3. 代码生成 (engineer)       → 源代码 + 基础校验
-  4. 测试验证 (test pipeline)  → 测试生成 + 执行 + 自动修复 + 报告
+5 阶段:
+  1. 需求分析 (orchestrator)    → requirement_report_*.md
+  2. 架构生成 (architect)       → task_*.json (含契约)
+  3. 源代码生成 (engineer)      → 项目源码
+  4. 测试架构生成 (test-architect) → test_tasks_*.json
+  5. 测试与修复执行 (test)      → 测试执行 + 自动修复 + 报告
 
 用法:
-    python brainAgent/basic.py "设计一个线上商城购物系统"              # 全流程
-    python brainAgent/basic.py -orchestrator "需求"                   # 只跑需求分析
-    python brainAgent/basic.py -architect                             # 从架构开始
-    python brainAgent/basic.py -engineer                              # 从代码生成开始
-    python brainAgent/basic.py -test                                  # 从测试开始
-    python brainAgent/basic.py -test --fast                           # 从测试开始(快速模式)
+    python brainAgent/basic.py "设计一个B2B2C线上商城购物系统，并给系统取个好名字"              # 1→2→3→4→5 全流程
+    python brainAgent/basic.py -orchestrator "需求"                   # 1→5 从需求分析开始
+    python brainAgent/basic.py -architect                             # 2→5 跳过需求，从架构开始
+    python brainAgent/basic.py -engineer                              # 3→5 跳过需求+架构，从代码生成开始
+    python brainAgent/basic.py --test-architect                       # 4→5 跳过前三步
+    python brainAgent/basic.py -test                                  # 5 只跑测试执行
+    python brainAgent/basic.py -test --fast                           # 5 快速模式
 """
 
 import asyncio, os, sys, time, argparse, subprocess
@@ -42,12 +44,43 @@ def _elapsed(t0):
     return f"{time.time() - t0:.0f}s"
 
 
+def _cleanup_round_failures(workspace: Path):
+    """每轮末清理 failed 任务的 ban 日志——无效经验不留。passed 任务的 ban 保留（有效经验）。"""
+    import json as _json
+    test_log_dir = project_root / "Memory" / "test_logs"
+    ban_dirs = [
+        project_root / "Memory" / "test_failure",
+        project_root / "Memory" / "source_failure",
+    ]
+
+    # 从 test_logs 找出本轮 passed 的任务（它们的 ban 是有效经验，保留）
+    passed_ids = set()
+    if test_log_dir.exists():
+        for f in test_log_dir.glob("*.json"):
+            try:
+                data = _json.loads(f.read_text("utf-8"))
+                if data.get("test_success") and data.get("source_success"):
+                    passed_ids.add(f.stem)
+            except Exception:
+                pass
+
+    # 只清理未通过任务的 ban
+    for d in ban_dirs:
+        if d.exists():
+            for f in d.glob("*.json"):
+                if f.stem not in passed_ids:
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+
+
 def _validate_code_generation(workspace: Path) -> dict:
     ws = Path(workspace).resolve()
     if not ws.exists():
         return {"ok": False, "error": f"workspace not found: {ws}"}
 
-    def _is_esm_frontend(filepath: Path) -> bool:
+    def _is_esm(filepath: Path) -> bool:
         try:
             head = filepath.read_text("utf-8")[:1024]
             cleaned = __import__('re').sub(r'//.*|/\*[\s\S]*?\*/', '', head)
@@ -56,26 +89,80 @@ def _validate_code_generation(workspace: Path) -> dict:
             return False
 
     js_files = list(ws.rglob("*.js"))
-    src_files = [f for f in js_files
+    # CJS 文件 → node --check
+    cjs_files = [f for f in js_files
                  if "node_modules" not in str(f)
                  and str(ws / "test") not in str(f.parent.resolve())
-                 and not _is_esm_frontend(f)]
+                 and not _is_esm(f)]
+    # ESM 文件 → esbuild 检查（node --check 不支持 import/export）
+    esm_files = [f for f in js_files
+                 if "node_modules" not in str(f)
+                 and str(ws / "test") not in str(f.parent.resolve())
+                 and _is_esm(f)]
 
     syntax_errors = []
-    for f in src_files:
+
+    # CJS 语法检查
+    for f in cjs_files:
         r = subprocess.run(["node", "--check", str(f)], capture_output=True, text=True, timeout=15, encoding="utf-8", errors="replace")
         if r.returncode != 0:
             rel = str(f.relative_to(ws)).replace("\\", "/")
             err = (r.stderr or "")[:120].replace('\n', ' ')
             syntax_errors.append(f"{rel}: {err}")
 
+    # ESM 语法检查（用 esbuild，Vite 已自带）
+    if esm_files:
+        esbuild_ok = _check_esm_syntax(ws, esm_files)
+        syntax_errors.extend(esbuild_ok)
+
     return {
         "ok": len(syntax_errors) == 0,
-        "js_files": len(src_files),
+        "js_files": len(cjs_files) + len(esm_files),
+        "cjs_files": len(cjs_files),
+        "esm_files": len(esm_files),
         "vue_files": len(list(ws.rglob("*.vue"))),
         "sql_files": len(list(ws.rglob("*.sql"))),
         "syntax_errors": syntax_errors,
     }
+
+
+def _check_esm_syntax(ws: Path, esm_files: list) -> list:
+    """用 esbuild 批量检查 ESM 文件语法。esbuild 是 Vite 的依赖，速度极快。"""
+    errors = []
+    esbuild = ws / "node_modules" / ".bin" / "esbuild"
+    if not esbuild.exists():
+        esbuild = ws / "node_modules" / "esbuild" / "bin" / "esbuild"
+    if not esbuild.exists():
+        # 尝试 npx
+        esbuild = "npx"
+        esbuild_args = ["esbuild"]
+    else:
+        esbuild = str(esbuild)
+        esbuild_args = []
+
+    for f in esm_files:
+        rel = str(f.relative_to(ws)).replace("\\", "/")
+        cmd = [esbuild] + esbuild_args + [str(f), "--bundle", "--format=esm", "--log-level=error", "--outfile=" + str(ws / ".esbuild-tmp.js")]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                             cwd=str(ws), encoding="utf-8", errors="replace")
+            if r.returncode != 0:
+                # 提取最有用的一行错误
+                err_lines = [l.strip() for l in (r.stderr or "").split('\n') if l.strip() and 'X [ERROR]' in l]
+                err = err_lines[0][:150] if err_lines else (r.stderr or "").strip()[:150]
+                errors.append(f"{rel}: {err}")
+        except subprocess.TimeoutExpired:
+            errors.append(f"{rel}: timeout")
+        except Exception as e:
+            errors.append(f"{rel}: {str(e)[:100]}")
+    # 清理临时文件
+    tmp = ws / ".esbuild-tmp.js"
+    if tmp.exists():
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    return errors
 
 
 def _validate_env_consistency(workspace: Path) -> dict:
@@ -100,14 +187,16 @@ def _validate_env_consistency(workspace: Path) -> dict:
             if m: env_vars.add(m.group(1))
     missing = sorted(code_vars - env_vars)
     if missing and env_file.exists():
-        # 从统一配置文件加载默认值，与 integrator.py 保持一致
-        try:
-            import json
-            config_path = project_root / "config" / "env_defaults.json"
-            config = json.loads(config_path.read_text("utf-8"))
-            defaults = config.get("env_defaults", {})
-        except Exception:
-            defaults = {}
+        defaults = {
+            'PORT': '3000', 'NODE_ENV': 'development',
+            'DB_HOST': 'localhost', 'DB_PORT': '3306', 'DB_USER': 'root',
+            'DB_PASSWORD': 'your_db_password', 'DB_NAME': 'testdb',
+            'JWT_SECRET': 'your_jwt_secret', 'JWT_EXPIRES_IN': '7d',
+            'JWT_REFRESH_SECRET': 'your_refresh_secret',
+            'ENCRYPTION_KEY': 'your_encryption_key_32chars',
+            'REDIS_URL': 'redis://localhost:6379/0', 'LOG_LEVEL': 'info',
+            'CORS_ORIGIN': '*',
+        }
         lines = env_file.read_text(encoding='utf-8').split('\n')
         for var in missing:
             default_val = defaults.get(var, f'your_{var.lower()}_here')
@@ -122,25 +211,29 @@ async def main():
     parser.add_argument("-orchestrator", action="store_true", help="从需求分析开始（全流程默认起点）")
     parser.add_argument("-architect", action="store_true", help="从架构设计开始（跳过需求分析）")
     parser.add_argument("-engineer", action="store_true", help="从代码生成开始（跳过需求+架构）")
-    parser.add_argument("-test", action="store_true", help="从测试验证开始（跳过需求+架构+代码）")
+    parser.add_argument("-test", action="store_true", help="从测试执行开始（跳过需求+架构+代码+测试架构）")
+    parser.add_argument("--test-architect", action="store_true", help="只生成测试任务清单（不执行测试）")
     parser.add_argument("--task-file", type=str, help="指定任务文件路径")
     parser.add_argument("--requirement-report", type=str, help="指定需求报告路径")
-    parser.add_argument("--max-rounds", type=int, default=3, help="需求分析最大轮次")
+    parser.add_argument("--max-rounds", type=int, default=5, help="需求分析最大轮次")
     parser.add_argument("--session-id", type=str, default="project_session", help="会话ID")
     parser.add_argument("--fast", action="store_true", help="测试快速模式")
     parser.add_argument("--resume", action="store_true", help="恢复模式：跳过已成功生成的代码")
     args = parser.parse_args()
 
-    # 确定起始阶段
-    start_from = "orchestrator"
-    if args.architect: start_from = "architect"
-    if args.engineer: start_from = "engineer"
-    if args.test: start_from = "test"
+    # 5 阶段级联：指定阶段 → 跳过之前部分，从该阶段开始跑到底
+    if args.test:             start_idx = 4
+    elif args.test_architect: start_idx = 3
+    elif args.engineer:       start_idx = 2
+    elif args.architect:      start_idx = 1
+    elif args.orchestrator:   start_idx = 0
+    else:                     start_idx = 0  # 未指定 → 全流程
 
-    run_orch = start_from == "orchestrator"
-    run_arch = start_from in ("orchestrator", "architect")
-    run_eng = start_from in ("orchestrator", "architect", "engineer")
-    run_test = True  # always run test
+    run_orch      = start_idx <= 0
+    run_arch      = start_idx <= 1
+    run_eng       = start_idx <= 2
+    run_test_arch = start_idx <= 3
+    run_test_exec = start_idx <= 4
 
     t_total = _timer()
 
@@ -153,7 +246,7 @@ async def main():
             print("错误：需求分析需要提供需求描述")
             sys.exit(1)
         print(f"\n{'='*60}")
-        print(f"  Step 1/4: 需求分析")
+        print(f"  Step 1/5: 需求分析")
         print(f"{'='*60}")
         t0 = _timer()
         result = await run_demand_analysis(session_id=args.session_id, requirement=args.requirement,
@@ -177,7 +270,7 @@ async def main():
     task_file = args.task_file
     if run_arch:
         print(f"\n{'='*60}")
-        print(f"  Step 2/4: 架构设计（生成开发任务+契约）")
+        print(f"  Step 2/5: 架构生成（开发任务+契约）")
         print(f"{'='*60}")
         t0 = _timer()
         arch_result = await run_architect_agent(report_path=report_path)
@@ -202,7 +295,7 @@ async def main():
     # ═══════════════════════════════════════════════════════════
     if run_eng:
         print(f"\n{'='*60}")
-        print(f"  Step 3/4: 代码生成（并发执行开发任务）")
+        print(f"  Step 3/5: 源代码生成（并发执行开发任务）")
         print(f"{'='*60}")
         t0 = _timer()
         # 清理旧产物
@@ -227,66 +320,69 @@ async def main():
         print("跳过代码生成")
 
     # ═══════════════════════════════════════════════════════════
-    # Step 4: 测试验证
+    # Step 4: 测试架构生成
     # ═══════════════════════════════════════════════════════════
-    if run_test:
+    test_tasks_file = None
+    if run_test_arch:
         print(f"\n{'='*60}")
-        print(f"  Step 4/4: 测试验证（生成 + 执行 + 自动修复）")
+        print(f"  Step 4/5: 测试架构生成（生成测试任务清单）")
         print(f"{'='*60}")
-
-        # 4a: 生成测试任务清单（-test 模式下跳过，直接用已有文件）
-        import glob
-        if start_from == "test":
-            files = sorted(glob.glob(f"{WORKSPACE}/test/test_tasks_*.json"))
-            test_tasks_file = files[-1] if files else ""
-            if test_tasks_file:
-                print(f"\n[Step 4a] 跳过生成，使用已有: {test_tasks_file}")
-            else:
-                print("\n[Step 4a] 未找到 test_tasks_*.json，无法运行测试")
+        t0 = _timer()
+        if not task_file:
+            from brainAgent.engineer import TASK_DIR as _ENG_TASK_DIR
+            _task_files = list(_ENG_TASK_DIR.glob("task_*.json"))
+            task_file = str(max(_task_files, key=lambda p: p.stat().st_mtime)) if _task_files else None
+        if not task_file:
+            print("错误：未找到任务文件，无法生成测试任务")
         else:
-            print("\n[Step 4a] 生成测试任务清单...")
-            t0 = _timer()
+            print(f"使用任务文件: {task_file}")
             test_arch_result = await run_test_architect(task_path=task_file)
             if test_arch_result.get("success"):
                 test_tasks_file = str(test_arch_result.get('output', ''))
                 print(f"测试任务: {test_tasks_file} ({test_arch_result.get('task_count', 0)} 个)  ({_elapsed(t0)})")
             else:
                 print(f"测试任务生成失败: {test_arch_result.get('error', '')[:200]}")
-                files = sorted(glob.glob(f"{WORKSPACE}/test/test_tasks_*.json"))
-                test_tasks_file = files[-1] if files else ""
-                if test_tasks_file:
-                    print(f"降级使用: {test_tasks_file}")
 
-        # 4b: 运行测试调度器（自动多轮）
+    # ═══════════════════════════════════════════════════════════
+    # Step 5: 测试与修复执行
+    # ═══════════════════════════════════════════════════════════
+    if run_test_exec:
+        print(f"\n{'='*60}")
+        print(f"  Step 5/5: 测试与修复执行（自动多轮）")
+        print(f"{'='*60}")
+
+        import glob
+        if not test_tasks_file:
+            _files = sorted(glob.glob(f"{WORKSPACE}/test/test_tasks_*.json"))
+            test_tasks_file = _files[-1] if _files else ""
+
         if test_tasks_file and Path(test_tasks_file).exists():
-            print("\n[Step 4b] 测试调度器（自动多轮）...")
+            print(f"测试任务文件: {test_tasks_file}")
             t0 = _timer()
-            prev_passed, passed, failed, blocked = 0, 0, 0, 0
-            stagnation_count = 0
-            for auto_round in range(1, 11):
+            prev_passed = None
+            for auto_round in range(1, 100):
                 test_report = await run_scheduler(str(WORKSPACE), test_tasks_file, fast=args.fast)
                 s = test_report.get("summary", {})
-                passed, failed, blocked = s.get('passed', 0), s.get('failed', 0), s.get('blocked', 0)
+                passed = s.get('passed', 0)
+                failed = s.get('failed', 0)
+                blocked = s.get('blocked', 0)
                 total = s.get('total', 0)
-                print(f"  第{auto_round}轮: {passed}通过 {failed}失败 {blocked}阻塞  ({_elapsed(t0)})")
+                print(f"  第{auto_round}轮: {passed}通过 / {failed}失败 / {blocked}阻塞  ({_elapsed(t0)})")
+
                 if total > 0 and passed == total:
                     print(f"  全部通过!")
                     break
-                if passed > prev_passed:
-                    prev_passed = passed
-                    stagnation_count = 0  # 有进展，重置停滞计数
-                    continue
-                stagnation_count += 1
-                if stagnation_count >= 2:
-                    print(f"  连续{stagnation_count}轮停滞 ({prev_passed}->{passed})，需人工")
-                    break
-                print(f"  停滞 {stagnation_count}/2 ({prev_passed}->{passed})，继续尝试...")
 
-            print(f"\n测试完成: {passed}通过 {failed}失败 {blocked}阻塞  ({_elapsed(t0)})")
+                _cleanup_round_failures(WORKSPACE)
+
+                if prev_passed is not None and passed <= prev_passed:
+                    print(f"  无进展 (passed {passed} <= {prev_passed})，停止")
+                    break
+                prev_passed = passed
+
+            print(f"\n测试完成: {passed}通过 / {failed}失败 / {blocked}阻塞  ({_elapsed(t0)})")
         else:
             print("未找到测试任务文件")
-    else:
-        print("跳过测试验证")
 
     # ═══════════════════════════════════════════════════════════
     print(f"\n{'='*60}")

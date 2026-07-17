@@ -61,18 +61,29 @@ async def check_syntax(files: List[str], workspace: str = "") -> Dict:
 
 
 def _check_js(target: Path, content: str, base: Path) -> Optional[Dict]:
-    """Node.js 原生语法检查（最快，无外部依赖）。"""
-    # 策略1: node --check（覆盖 95% 的语法错误：缺括号/缺分号/非法token）
+    """Node.js 原生语法检查。ESM 文件用 --input-type=module，CJS 用 --check。"""
+    is_esm = bool(re.search(r'(?:^|\n)\s*(?:import\s+|export\s+(?:default\s+|const\s+|function\s+|class\s+))', content))
+
     try:
-        r = subprocess.run(
-            ["node", "--check", str(target)],
-            capture_output=True, text=True, timeout=10,
-            encoding="utf-8", errors="replace",
-        )
+        if is_esm:
+            # ESM: 用 stdin 传入 + --input-type=module，避免 "Cannot use import statement outside a module" 误报
+            r = subprocess.run(
+                ["node", "--input-type=module", "--check", "-"],
+                input=content, capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
+            )
+        else:
+            r = subprocess.run(
+                ["node", "--check", str(target)],
+                capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
+            )
         if r.returncode == 0:
-            return None  # 通过
-        # 解析 node 错误输出
+            return None
         msg = (r.stderr or r.stdout or "").strip()
+        # 过滤掉 ESM 警告（不是语法错误）
+        if "Warning: To load an ES module" in msg:
+            return None
         line = _parse_node_error_line(msg)
         return {"file": str(target.relative_to(base)), "line": line, "message": msg[:200]}
     except subprocess.TimeoutExpired:

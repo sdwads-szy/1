@@ -57,10 +57,29 @@ async def run_test(
         return _error_result(f"Test file not found: {test_path}", "missing_file")
 
     rel_path = str(test_path.relative_to(root)).replace("\\", "/")
+    # 用 node 直调避免 Windows PATH 问题（npx 在 subprocess 中可能找不到）
     if test_framework == "vitest":
-        cmd = f'npx vitest run "{rel_path}" --reporter=json'
-    elif test_framework == "jest":
-        cmd = f'npx jest "{rel_path}" --json --verbose --forceExit --testTimeout={timeout_seconds * 1000}'
+        vitest_bin = root / "node_modules" / "vitest" / "vitest.mjs"
+        if vitest_bin.exists():
+            cmd = f'node "{vitest_bin}" run "{rel_path}" --reporter=json'
+        else:
+            cmd = f'npx vitest run "{rel_path}" --reporter=json'
+    elif test_framework in ("jest", "jest+supertest", "jest+supertest (CJS)"):
+        jest_bin = root / "node_modules" / "jest" / "bin" / "jest.js"
+        cmd = f'node "{jest_bin}" "{rel_path}" --json --verbose --forceExit --testTimeout={timeout_seconds * 1000}'
+    elif test_framework == "k6":
+        # k6: 优先本地二进制，不可用则 Docker
+        import shutil, platform
+        if shutil.which("k6"):
+            cmd = f'k6 run "{rel_path}"'
+        else:
+            abs_root = str(root).replace("\\", "/")
+            if platform.system() == "Windows":
+                drive = abs_root[0].lower()
+                docker_path = f"/{drive}{abs_root[2:]}"
+            else:
+                docker_path = abs_root
+            cmd = f'docker run --rm -v "{docker_path}":/tests grafana/k6 run /tests/{rel_path}'
     else:
         cmd = f'npx {test_framework} "{rel_path}"'
     if extra_args:
@@ -84,7 +103,7 @@ async def run_test(
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
 
-        if test_framework in ("jest", "vitest"):
+        if test_framework in ("jest", "vitest", "jest+supertest", "jest+supertest (CJS)"):
             result = _parse_json(stdout, stderr, proc.returncode)
         else:
             result = _parse_text(stdout, stderr, proc.returncode)
@@ -107,11 +126,13 @@ def _parse_json(stdout: str, stderr: str, exit_code: int) -> Dict[str, Any]:
     try:
         data = json.loads(combined)
     except json.JSONDecodeError:
-        # 尝试只从 stdout 中提取
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
             return _parse_text(stdout, stderr, exit_code)
+
+    if not isinstance(data, dict):
+        return _parse_text(stdout, stderr, exit_code)
 
     total = data.get("numTotalTests", 0)
     passed = data.get("numPassedTests", 0)
@@ -288,7 +309,18 @@ async def agent_run_test(
     file_path: str,
     framework: str = "jest",
     timeout_seconds: int = 120,
+    workspace: str = "",
 ) -> Dict[str, Any]:
     """供 Agent 调用的异步包装"""
-    project_root = str(Path(file_path).parent.parent.resolve()) if file_path else "."
+    if workspace:
+        project_root = str(Path(workspace).resolve())
+    else:
+        # 回退：从文件路径往上找含 node_modules 的目录
+        p = Path(file_path).resolve()
+        for parent in [p.parent.parent, p.parent.parent.parent]:
+            if (parent / "node_modules").exists():
+                project_root = str(parent)
+                break
+        else:
+            project_root = str(Path(file_path).parent.parent.resolve()) if file_path else "."
     return await run_test(file_path, framework, project_root, timeout_seconds)

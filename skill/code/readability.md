@@ -6,16 +6,19 @@
 
 | 类别 | 风格 | 示例 |
 |------|------|------|
-| 后端文件 | kebab-case | `order-service.js`, `auth-controller.js` |
+| 后端 route | camelCase | `routes/auth.js`, `routes/order.js` |
+| 后端 controller | camelCase | `controllers/authController.js` |
+| 后端 service | camelCase | `services/authService.js` |
 | 前端页面 | PascalCase | `Login.vue`, `ProductDetail.vue` |
-| 前端工具 | camelCase | `request.js`, `userStore.js` |
-| SQL 文件 | snake_case | `schema_db_tables.sql` |
+| 前端 API 模块 | camelCase | `src/api/auth.js`, `src/api/order.js` |
+| 前端 store | camelCase | `src/stores/user.js` |
+| SQL 文件 | snake_case | `database/schema/users.sql` |
 | JS 变量/函数 | camelCase | `getOrderList`, `userId`, `payAmount` |
 | 数据库字段 | snake_case | `order_id`, `created_at`, `pay_amount` |
+| 数据库表名 | 复数 snake_case | `users`, `order_items`, `payment_logs` |
 | 常量 | UPPER_SNAKE_CASE | `MAX_RETRY_COUNT`, `DEFAULT_PAGE_SIZE` |
 | Vue 组件 | PascalCase | `ProductList`, `OrderDetail` |
 | 路由路径 | kebab-case | `/product-detail`, `/order-list` |
-| 表名 | 复数 snake_case | `users`, `order_items`, `payment_logs` |
 
 ## 代码结构
 

@@ -1,52 +1,41 @@
-# c: logic 层 — 源码修复
+# C repair: 逻辑层
 
-## 下层真理（不可质疑 — 来自 bans_text）
-- **infra+db**: 环境+表结构正确 ← 不怀疑基础
-- **api**: 端点请求/响应格式已锁定 ← 调 API 时的字段名/路径严格对齐
-- **db-api**: SQL 签名正确 ← DAO 调用参数对齐真理签名
-- **auth**: Token 格式+权限隔离正确 ← 不怀疑 role 校验逻辑
+D 判定分类后 C 的二次修复策略。适用于 backend_proc / logic / scenario。nfr 已移至 [quality.md](quality.md)。
 
-## 输入输出对齐
-```
-api 输出 → logic 输入:
-  POST /api/orders → IN:{addressId, cartItemIds, payChannel} → 字段名严格一致
-  response → OUT:{orderId, paymentId, payAmount} → 返回真理中的字段，不编造
-db-api 输出 → logic 输入:
-  findByPhone(encryptedPhone) → 参数名 'encryptedPhone' 不是 'phone'
-```
+## UNCHANGED — 同 ban 再命中
 
-## 修复策略
+| 层 | C 常见失误 | 纠正 |
+|----|----------|------|
+| backend_proc | 加了 beginTransaction 忘 commit/rollback | 检查 try-catch 完整性 |
+| backend_proc | B ban 指向的代码行没改到 | 重读 B ban 的文件:行号 |
+| logic | 只修下游没修上游 | 上下游数据对接处同时检查 |
+| logic | 字段名两端仍不一致 | 全局搜索该字段所有引用 |
+| scenario | 只修断点不修后续步骤 | 沿 process 链检查后续 |
 
-### 步骤顺序错
-- 症状: `toHaveBeenNthCalledWith(N)` 不匹配 — 第 N 次调用不是预期的操作
-- 原因: 函数体内代码顺序与 logic 契约 steps[].stepId 不一致
-- 治: 重排代码顺序，严格对齐契约步骤链
+## REGRESSION — 原来 PASS 现在 FAIL
 
-### 事务未回滚
-- 症状: 异常路径测试失败 — rollback 未被调用
-- 原因: catch 块缺 rollback
-- 治: `catch (err) { await db.rollback(); throw err; }`
+| 层 | C 常见失误 | 纠正 |
+|----|----------|------|
+| backend_proc | 改 step3 SQL 改变了 mock 期望 | 检查 SQL 参数变化 |
+| backend_proc | 加字段后原有断言 toMatchObject 失败 | 检查新字段是否影响旧断言 |
+| logic | 改字段名导致其他功能失败 | 全局搜索该字段名 |
 
-### 错误码未映射
-- 症状: 抛出了原始 DB 错误而非业务错误码
-- 原因: catch 后未按 logic 契约 errorMapping 转换
-- 治: `throw new Error('INSUFFICIENT_STOCK')` 对齐 errorMapping
+## DEGRADED — 新错误
 
-### 补偿未执行
-- 症状: 外部调用失败后补偿逻辑未触发
-- 原因: catch 块中只有 rollback 没有 compensation
-- 治: 按 steps[].compensation 补补偿动作
+| 层 | C 常见失误 | 纠正 |
+|----|----------|------|
+| backend_proc | 新加 INSERT 列名写错 | 对照 DDL 确认列名 |
+| logic | 补偿方向写反 | UPDATE stock+quantity(恢复) vs stock-quantity(扣减) |
+| logic | 幂等键字段名错 | 对照契约 idempotentKey |
+| scenario | 新改字段类型不匹配 | 检查上下游数据传递处 |
 
-### 乐观锁未实现
-- 症状: 并发测试超卖
-- 原因: UPDATE 未带版本条件
-- 治: `UPDATE ... SET stock=stock-? WHERE id=? AND stock>=?` → 检查 affectedRows
+## CHEAT
 
-### API 调用字段名错
-- 症状: 调用 api 层时传参字段名不匹配
-- 原因: snaked_case vs camelCase
-- 治: 对齐 api 真理中的请求/响应字段名
-
-## 工具选择
-- 步骤链/事务重构 → `create_file`
-- 单错误码/单补偿补 → `edit_batch`
+| 层 | 常见作弊 | 纠正 |
+|----|---------|------|
+| backend_proc | 删 beginTransaction/commit/rollback | 恢复事务 |
+| backend_proc | 去掉 FOR UPDATE | 恢复 |
+| backend_proc | 删异常处理 | 恢复 try-catch+rollback+throw |
+| logic | 删状态检查 | 恢复 |
+| logic | 跳过补偿步骤 | 恢复完整补偿链 |
+| scenario | 删异常流步骤 | 恢复 |

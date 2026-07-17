@@ -84,9 +84,6 @@ python brainAgent/basic.py -orchestrator "需求"   # 只要需求分析
 python brainAgent/basic.py -architect             # 从架构设计开始
 python brainAgent/basic.py -engineer --resume     # 恢复代码生成
 python brainAgent/basic.py -test                  # 从测试开始
-
-# 独立集成
-python brainAgent/run_integration.py
 ```
 
 ## 本次运行状态

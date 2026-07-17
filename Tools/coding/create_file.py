@@ -27,7 +27,10 @@ async def create_file(
                 "error": f"Workspace does not exist: {workspace}"
             }
     else:
-        base = Path.cwd().resolve()
+        # 默认 workspace 为项目根（此文件在 Tools/coding/ 下，项目根在上两级）
+        base = (Path(__file__).resolve().parent.parent.parent)
+        if not base.exists():
+            base = Path.cwd().resolve()
 
     # 解析目标路径
     target = Path(file_path)

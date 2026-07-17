@@ -1,34 +1,41 @@
 # utils/dependency_graph.py
 """
-共享依赖图构建 — 拓扑排序 + 严格类型分层。
+共享依赖图构建 — 拓扑排序 + 3 大测试类型分层。
 
 核心规则:
-  1. 同类型任务必须在连续层中执行（提高 LLM system prompt 缓存命中率）
-  2. 不同类型任务不得在同一层并发（避免 prompt 前缀频繁切换）
-  3. 层间按 (拓扑深度, 类型优先级) 排序
-
-类型优先级（自底向上）:
-  infra < db < backend < frontend < integration
+  1. 同类型任务必须在连续层中执行
+  2. 层间按 (拓扑深度, 类型优先级) 排序: static → interface → logic
 """
 
 from typing import List, Dict, Tuple, Optional
 
+# 4 大测试类型 — 自底向上
 TYPE_ORDER = [
-    "repair",          # -1: 修复层
-    "infra",           #  0: 基础设施
-    "db",              #  1: 数据库
-    "frontend_static", #  1.5: 前端静态
-    "auth",            #  2: Auth
-    "db_api",          #  3: db-api
-    "peer_deps",       #  3.5: 同层依赖
-    "api",             #  4: api
-    "backend_proc",    #  4.5: 后端处理
-    "navigation",      #  5: navigation
-    "logic",           #  6: logic
-    "scenario",        #  7: scenario
-    "nfr",             #  8: NFR
+    "static",          # 0: 静态检查 (infra/db/frontend/peer_deps/integ)
+    "interface",       # 1: 接口测试 (auth/db_api/api/navigation)
+    "logic",           # 2: 逻辑测试 (backend_proc/logic/scenario)
+    "quality",         # 3: 质量测试 (nfr)
 ]
 _TYPE_RANK = {t: i for i, t in enumerate(TYPE_ORDER)}
+
+# 同一 testType 内的原始层优先级（子层排序）
+_SUB_LAYER_RANK = {
+    "repair": 0, "infra": 1, "db": 2, "frontend_static": 3, "frontend": 3,
+    "peer_deps": 4, "integ": 5,
+    "auth": 10, "db_api": 11, "api": 12, "navigation": 13,
+    "backend_proc": 20, "backend": 20, "logic": 21, "scenario": 22, "nfr": 23,
+}
+
+# 层 → 4 类型映射
+_LAYER_TO_TYPE = {
+    "repair": "static", "infra": "static", "db": "static",
+    "frontend": "static", "peer_deps": "static", "integ": "static",
+    "auth": "interface", "db_api": "interface", "api": "interface",
+    "navigation": "interface",
+    "backend_proc": "logic", "backend": "logic",
+    "logic": "logic", "scenario": "logic",
+    "nfr": "quality",
+}
 
 
 def _get_tid(t: dict) -> str:
@@ -37,12 +44,17 @@ def _get_tid(t: dict) -> str:
 
 
 def _get_type(t: dict) -> str:
-    """统一 type 获取。优先 layer（测试任务），fallback 到 type（架构任务）。"""
+    """统一 type 获取。优先 testType（新），fallback layer→映射，最后 type。"""
+    # 新格式：testType
+    tt = t.get("testType", "")
+    if tt in _TYPE_RANK:
+        return tt
+    # 旧格式：layer → 映射到 3 类型
     raw = t.get("layer") or t.get("type") or ""
-    # 旧名→新名归一化
     aliases = {"infrastructure": "infra", "database": "db",
                "frontend": "frontend_static", "backend": "backend_proc"}
-    return aliases.get(raw, raw)
+    old_type = aliases.get(raw, raw)
+    return _LAYER_TO_TYPE.get(old_type, old_type)
 
 
 def build_full(tasks: list) -> Tuple[Dict[str, dict], Dict[str, list], Dict[str, int]]:
@@ -67,7 +79,35 @@ def build_full(tasks: list) -> Tuple[Dict[str, dict], Dict[str, list], Dict[str,
             if dep in dependents:
                 dependents[dep].append(_get_tid(t))
 
+    # 🛑 环检测
+    cycles = _detect_cycles(task_map)
+    if cycles:
+        print(f"[dependency_graph] ⚠️ {len(cycles)} 个循环依赖: {cycles}")
+
     return task_map, dependents, in_degree
+
+
+def _detect_cycles(task_map: dict) -> list:
+    """DFS 检测依赖图中的环"""
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {tid: WHITE for tid in task_map}
+    cycles = []
+
+    def dfs(tid, path):
+        color[tid] = GRAY
+        for dep in task_map[tid].get("dependencies", []):
+            if dep not in color: continue
+            if color[dep] == GRAY:
+                start = path.index(dep) if dep in path else 0
+                cycles.append(path[start:] + [dep])
+            elif color[dep] == WHITE:
+                dfs(dep, path + [dep])
+        color[tid] = BLACK
+
+    for tid in task_map:
+        if color[tid] == WHITE:
+            dfs(tid, [tid])
+    return cycles
 
 
 def build_layered(tasks: list) -> List[List[dict]]:
@@ -111,34 +151,39 @@ def build_layered(tasks: list) -> List[List[dict]]:
         cyclic = [tid for tid, d in depth.items() if d >= max_iterations // 2]
         raise ValueError(f"Circular dependency detected among tasks: {cyclic[:10]}")
 
-    # ── Step 2: 排序（先按类型优先级，再按深度）──
-    # 🛑 类型优先于深度：确保所有 infra 在一起、所有 db 在一起...
-    #    只有同类型任务内部的依赖关系才体现在深度排序中
-    sorted_tasks = sorted(
-        tasks,
-        key=lambda t: (
-            _TYPE_RANK.get(_get_type(t), 99),   # 类型优先
-            depth.get(_get_tid(t), 999),         # 同类型内按深度
-        ),
-    )
+    # ── Step 2: 排序（类型 → 子层 → 深度）──
+    def _sort_key(t):
+        ttype = _get_type(t)
+        layer = t.get("layer") or _get_type(t)
+        return (
+            _TYPE_RANK.get(ttype, 99),
+            _SUB_LAYER_RANK.get(layer, 50),
+            depth.get(_get_tid(t), 999),
+        )
 
-    # ── Step 3: 同类型按依赖深度拆分为连续层 ——
-    # 同类型任务仍保持连续（缓存命中），但若有依赖关系则拆层
+    sorted_tasks = sorted(tasks, key=_sort_key)
+
+    # ── Step 3: 按 (type, sublayer) 拆分 ——
+    # 同一 (testType, 原始layer) 内仍有依赖时再拆
     layers: List[List[dict]] = []
     current_type: Optional[str] = None
+    current_sublayer: Optional[int] = None
     current_layer: List[dict] = []
 
     for t in sorted_tasks:
         ttype = _get_type(t)
+        layer = t.get("layer") or ttype
+        sublayer = _SUB_LAYER_RANK.get(layer, 50)
         tid = _get_tid(t)
         deps = set(t.get("dependencies", []))
         layer_ids = {_get_tid(x) for x in current_layer}
 
-        # 新类型 或 依赖当前层内某个任务 → 新层
-        if ttype != current_type or (deps & layer_ids):
+        # 新类型 / 新子层 / 依赖当前层任务 → 新层
+        if ttype != current_type or sublayer != current_sublayer or (deps & layer_ids):
             if current_layer:
                 layers.append(current_layer)
             current_type = ttype
+            current_sublayer = sublayer
             current_layer = [t]
         else:
             current_layer.append(t)

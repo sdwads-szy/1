@@ -53,39 +53,31 @@ def get_bans(task_id: str, target: str = "test_failure") -> list:
 
 
 def store_bans(task_id: str, target: str, new_bans: list) -> int:
-    """存储多条 ban。过滤 fallback、空 ban、以及指纹完全相同的重复 ban。
-
-    Args:
-        task_id: 任务 ID
-        target: "test_failure" 或 "source_failure"
-        new_bans: 新 ban 列表
-
-    Returns:
-        实际新增的 ban 数量
-    """
+    """存储多条 ban。仅过滤模板占位符未替换的无效 ban，不做内容修改或去重。"""
     if not new_bans:
         return 0
+
+    def _has_template_placeholder(text: str) -> bool:
+        import re as _re
+        return bool(_re.search(r'\{[a-zA-Z_一-鿿]+\}', text))
 
     base = TEST_FAILURE_DIR if target == "test_failure" else SOURCE_FAILURE_DIR
     p = base / f"{task_id}.json"
     existing = get_bans(task_id, target)
-    existing_fps = {b.get("f", "") for b in existing if isinstance(b, dict)}
     added = 0
 
     for ban in new_bans:
         if not isinstance(ban, dict):
             continue
-        fp = ban.get("f", "")
-        if fp == "fallback":
+        if not ban.get("f", "").strip() or not ban.get("b", "").strip():
             continue
-        if not ban.get("b", "").strip():
+        # 指纹含模板占位符 → LLM 没替换 → 丢弃
+        if _has_template_placeholder(ban["f"] + ban["b"]):
             continue
-        # 去重：同一指纹已存在则跳过
-        if fp and fp in existing_fps:
+        # 完全相同的 ban 跳过（f 和 b 都相同）
+        if any(b.get("f") == ban["f"] and b.get("b") == ban["b"] for b in existing):
             continue
         existing.append(ban)
-        if fp:
-            existing_fps.add(fp)
         added += 1
 
     if added > 0:
@@ -109,10 +101,10 @@ def format_bans_for_agent(bans: list) -> str:
 
     lines = [
         "## 禁止清单（根据 fingerprint 判断哪些已修复、哪些仍需处理）",
-        "格式：f = layer|actor|target|subtype | b = DON'T: 错误 | fix: 正确做法 | file",
-        "layer: repair/infra/db/frontend_static/auth/db_api/peer_deps/api/backend_proc/navigation/logic/scenario/nfr",
-        "actor: test_writer(A)/test_runner(B)/source_fixer(C)/test_runner(D)",
-        "subtype: syntax/MOCK_GAP/MISSING_IMPORT/EXPORT_MISMATCH/PASSBY_MISMATCH/PATH_MISMATCH/COLUMN_MISMATCH..."
+        "格式：f = layer|fix_target|file|subtype | b = DON'T: 错误 | fix: 正确做法 | target=test/source",
+        "layer: infra/db/frontend/auth/db_api/api/navigation/backend_proc/logic/scenario/nfr",
+        "fix_target: test(修测试文件) 或 source(修源码文件)",
+        "subtype: WRONG_COLUMN/SYNTAX/MOCK_GAP/MISSING_EXPORT/WRONG_FORMAT/MISSING_ROLLBACK/CHEAT..."
     ]
     files = set()
 
@@ -121,11 +113,11 @@ def format_bans_for_agent(bans: list) -> str:
             f_text = b.get("f", "")
             b_text = b.get("b", "")
 
-            # 从 f 中提取文件简名（第二个字段）
+            # 从 f 中提取文件简名（第3段: layer|fix_target|file|subtype）
             if f_text:
                 parts = f_text.split("|")
                 if len(parts) >= 3:
-                    files.add(parts[1])
+                    files.add(parts[2])  # index 2 = file name
 
             # 兼容旧格式：如果 b 中含有 "| fix:"，则提取
             if "| fix:" in b_text:

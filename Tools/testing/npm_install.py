@@ -33,7 +33,7 @@ async def npm_install(packages: str = "", workspace: str = "") -> dict:
                 "packages": [],
             }
 
-    cmd = ["npm", "install", "--no-audit", "--no-fund"]
+    cmd = ["npm", "install", "--no-audit", "--no-fund", "--legacy-peer-deps"]
     if packages.strip():
         cmd.extend(packages.strip().split())
 

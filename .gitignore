@@ -18,22 +18,19 @@ venv/
 dist/
 build/
 
+# ── 产物目录（每次运行生成，不提交）──
+work/project/
+
+# ── 运行时记忆（包含 API 日志/会话记录/禁令/真理/快照，不提交）──
+Memory/
+doc/RESULT_ANALYSIS.md
+
 # ── Node（产物内的 node_modules，太大）──
 node_modules/
 package-lock.json
 
 # ── 向量数据库（二进制大文件，可重建）──
 knowledge/
-
-# ── 运行时记忆（包含 API 日志/会话记录，可重建）──
-Memory/chat_sessions/
-Memory/test_failure/
-Memory/source_failure/
-Memory/test_logs/
-Memory/truths/
-Memory/snapshots/
-Memory/logs/
-Memory/agent_logs/
 
 # ── 旧产物清理 ──
 work/project/task/task_202*.json

@@ -25,7 +25,6 @@ def append_round(round_num: int, round_data: dict, full_memory: dict) -> dict:
         "summary": round_data.get("summary", ""),
         "modules": round_data.get("modules", {}),
         "entities": round_data.get("entities", []),
-        "ui": round_data.get("ui", {}),
         "pending": round_data.get("pending", []),
     }
 
@@ -42,14 +41,12 @@ def merge_round(round_num: int, round_data: dict, summary: dict) -> dict:
 
     modules: 同名模块 deep merge（新字段覆盖旧字段）
     entities: 去重追加
-    ui: 新覆盖旧
     pending: 按 q 文本去重
     """
     clean = {
         "session_id": summary.get("session_id", ""),
         "original_requirement": summary.get("original_requirement", ""),
         "updated_round": round_num,
-        "ui": _merge_dict(summary.get("ui", {}), round_data.get("ui", {})),
         "modules": _merge_modules(summary.get("modules", {}), round_data.get("modules", {})),
         "entities": sorted(set(
             summary.get("entities", []) + round_data.get("entities", [])
