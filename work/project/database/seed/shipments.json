@@ -1,0 +1,47 @@
+[
+  {
+    "id": 1,
+    "sub_order_id": 1,
+    "tracking_no": "SF1234567890001",
+    "carrier_code": "SF",
+    "status": "in_transit",
+    "created_at": "2025-01-10 10:30:00",
+    "updated_at": "2025-01-11 08:45:00"
+  },
+  {
+    "id": 2,
+    "sub_order_id": 2,
+    "tracking_no": "ZTO9876543210002",
+    "carrier_code": "ZTO",
+    "status": "delivered",
+    "created_at": "2025-01-08 14:20:00",
+    "updated_at": "2025-01-11 16:30:00"
+  },
+  {
+    "id": 3,
+    "sub_order_id": 3,
+    "tracking_no": "YTO5566778890003",
+    "carrier_code": "YTO",
+    "status": "pending_pickup",
+    "created_at": "2025-01-12 09:15:00",
+    "updated_at": "2025-01-12 09:15:00"
+  },
+  {
+    "id": 4,
+    "sub_order_id": 4,
+    "tracking_no": "JD1122334450004",
+    "carrier_code": "JD",
+    "status": "in_transit",
+    "created_at": "2025-01-11 11:00:00",
+    "updated_at": "2025-01-12 07:30:00"
+  },
+  {
+    "id": 5,
+    "sub_order_id": 5,
+    "tracking_no": "YD9988776650005",
+    "carrier_code": "YD",
+    "status": "returned",
+    "created_at": "2025-01-09 16:45:00",
+    "updated_at": "2025-01-13 10:00:00"
+  }
+]

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <rect width="640" height="360" fill="#0E1017"/>
+  <rect x="64" y="36" width="512" height="288" rx="8" fill="#151720" stroke="#1C1F2B" stroke-width="1"/>
+  <text x="320" y="185" text-anchor="middle" fill="#8B5CF6" font-size="24" font-family="sans-serif">▶ 视频占位</text>
+</svg>

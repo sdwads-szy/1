@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1,
+    "shipment_id": 1,
+    "event": "快件已揽收",
+    "timestamp": "2025-01-15 14:30:00",
+    "location": "广东省深圳市南山区"
+  },
+  {
+    "id": 2,
+    "shipment_id": 1,
+    "event": "快件到达转运中心",
+    "timestamp": "2025-01-15 18:00:00",
+    "location": "广东省深圳市宝安区"
+  },
+  {
+    "id": 3,
+    "shipment_id": 1,
+    "event": "快件在运输中",
+    "timestamp": "2025-01-16 08:00:00",
+    "location": "广东省广州市"
+  }
+]

@@ -1,0 +1,17 @@
+-- SKU 规格表：库存量单位，定义具体规格（颜色/尺寸等）下的价格与图片
+SET FOREIGN_KEY_CHECKS = 0;
+
+CREATE TABLE IF NOT EXISTS `sku` (
+  `id` INT NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  `spu_id` INT NOT NULL COMMENT '所属SPU ID',
+  `spec_name` VARCHAR(128) NOT NULL COMMENT '规格名称，如''暗夜黑 256GB''',
+  `price` DECIMAL(10,2) NOT NULL COMMENT '售价，单位元',
+  `image` VARCHAR(255) DEFAULT NULL COMMENT 'SKU规格图URL',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
+  PRIMARY KEY (`id`),
+  INDEX `idx_spu_id` (`spu_id`),
+  CONSTRAINT `fk_sku_spu` FOREIGN KEY (`spu_id`) REFERENCES `spu` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品SKU表：库存量单位，定义具体规格（颜色/尺寸等）下的价格与图片';
+
+

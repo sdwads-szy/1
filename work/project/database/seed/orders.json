@@ -1,0 +1,52 @@
+[
+  {
+    "id": 1,
+    "order_no": "ORD202501010000001",
+    "user_id": 1,
+    "total_amount": 6999.00,
+    "status": "completed",
+    "paid_at": "2025-01-01 10:30:00",
+    "created_at": "2025-01-01 10:25:00",
+    "updated_at": "2025-01-05 14:00:00"
+  },
+  {
+    "id": 2,
+    "order_no": "ORD202501020000002",
+    "user_id": 1,
+    "total_amount": 2598.00,
+    "status": "shipped",
+    "paid_at": "2025-01-02 09:15:00",
+    "created_at": "2025-01-02 09:10:00",
+    "updated_at": "2025-01-03 11:20:00"
+  },
+  {
+    "id": 3,
+    "order_no": "ORD202501030000003",
+    "user_id": 2,
+    "total_amount": 13999.00,
+    "status": "paid",
+    "paid_at": "2025-01-03 15:45:00",
+    "created_at": "2025-01-03 15:40:00",
+    "updated_at": "2025-01-03 15:45:00"
+  },
+  {
+    "id": 4,
+    "order_no": "ORD202501040000004",
+    "user_id": 2,
+    "total_amount": 450.00,
+    "status": "pending",
+    "paid_at": null,
+    "created_at": "2025-01-04 20:00:00",
+    "updated_at": "2025-01-04 20:00:00"
+  },
+  {
+    "id": 5,
+    "order_no": "ORD202501050000005",
+    "user_id": 1,
+    "total_amount": 3200.00,
+    "status": "refunding",
+    "paid_at": "2025-01-05 08:00:00",
+    "created_at": "2025-01-05 07:55:00",
+    "updated_at": "2025-01-06 10:30:00"
+  }
+]

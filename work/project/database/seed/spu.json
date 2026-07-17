@@ -1,0 +1,22 @@
+[
+  {"id": 1, "shop_id": 1, "category_id": 1, "name": "无线蓝牙耳机 Pro", "description": "<p>高品质降噪蓝牙耳机，续航48小时</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 1523},
+  {"id": 2, "shop_id": 1, "category_id": 1, "name": "快充数据线 1.5m", "description": "<p>支持100W快充，编织材质耐用</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 8921},
+  {"id": 3, "shop_id": 1, "category_id": 9, "name": "手机壳 透明防摔", "description": "<p>TPU材质，四角气囊保护</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 3456},
+  {"id": 4, "shop_id": 1, "category_id": 10, "name": "智能手表 GT3", "description": "<p>AMOLED屏幕，血氧心率监测</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 678},
+  {"id": 5, "shop_id": 1, "category_id": 2, "name": "机械键盘 青轴87键", "description": "<p>RGB背光，全键无冲</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 2340},
+  {"id": 6, "shop_id": 1, "category_id": 2, "name": "无线鼠标 静音款", "description": "<p>人体工学设计，双模连接</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 5678},
+  {"id": 7, "shop_id": 1, "category_id": 3, "name": "迷你电饭煲 1.5L", "description": "<p>智能预约，不粘内胆</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 912},
+  {"id": 8, "shop_id": 1, "category_id": 4, "name": "纯棉T恤 男款圆领", "description": "<p>100%精梳棉，透气舒适</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 4321},
+  {"id": 9, "shop_id": 1, "category_id": 5, "name": "氨基酸洗面奶 120g", "description": "<p>温和清洁，不紧绷</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 2987},
+  {"id": 10, "shop_id": 1, "category_id": 8, "name": "瑜伽垫 加厚防滑", "description": "<p>TPE环保材质，双面防滑</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 1654},
+  {"id": 11, "shop_id": 2, "category_id": 6, "name": "坚果大礼包 1.2kg", "description": "<p>6种坚果混合，每日坚果</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 7890},
+  {"id": 12, "shop_id": 2, "category_id": 11, "name": "手撕牛肉干 500g", "description": "<p>内蒙古风干牛肉，五香麻辣可选</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 3456},
+  {"id": 13, "shop_id": 2, "category_id": 7, "name": "多功能收纳盒 三件套", "description": "<p>PP材质，可叠放节省空间</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 2109},
+  {"id": 14, "shop_id": 2, "category_id": 12, "name": "衣物真空压缩袋 10个装", "description": "<p>含手泵，防潮防霉</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 5432},
+  {"id": 15, "shop_id": 2, "category_id": 3, "name": "空气炸锅 4.5L", "description": "<p>360°热风循环，无油健康</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 1876},
+  {"id": 16, "shop_id": 2, "category_id": 6, "name": "有机蜂蜜 500g", "description": "<p>长白山椴树蜜，自然成熟</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 1234},
+  {"id": 17, "shop_id": 2, "category_id": 7, "name": "记忆棉枕 护颈款", "description": "<p>慢回弹记忆棉，人体工学曲线</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 3210},
+  {"id": 18, "shop_id": 2, "category_id": 4, "name": "帆布双肩包 大容量", "description": "<p>复古做旧风格，可放15寸笔记本</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 987},
+  {"id": 19, "shop_id": 2, "category_id": 5, "name": "防晒霜 SPF50+ 60ml", "description": "<p>清爽不油腻，防水防汗</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 4567},
+  {"id": 20, "shop_id": 2, "category_id": 8, "name": "跑步鞋 男女同款", "description": "<p>飞织鞋面，缓震回弹</p>", "default_image": "/img/public/placeholder/product.svg", "status": "listed", "sales": 2345}
+]

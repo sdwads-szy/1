@@ -1,0 +1,57 @@
+[
+  {
+    "id": 1,
+    "transaction_no": "TXN20250101000001",
+    "sub_order_id": 1,
+    "channel": "wechat",
+    "amount": 6999.00,
+    "status": "success",
+    "callback_log": "{\"trade_no\":\"WX20250101000001\",\"time_end\":\"2025-01-01T10:30:00Z\",\"total_fee\":699900,\"fee_type\":\"CNY\"}",
+    "created_at": "2025-01-01 10:29:00",
+    "updated_at": "2025-01-01 10:30:05"
+  },
+  {
+    "id": 2,
+    "transaction_no": "TXN20250101000002",
+    "sub_order_id": 2,
+    "channel": "alipay",
+    "amount": 2999.00,
+    "status": "success",
+    "callback_log": "{\"trade_no\":\"ALI20250101000001\",\"gmt_payment\":\"2025-01-01T11:15:00Z\",\"total_amount\":\"2999.00\"}",
+    "created_at": "2025-01-01 11:14:00",
+    "updated_at": "2025-01-01 11:15:10"
+  },
+  {
+    "id": 3,
+    "transaction_no": "TXN20250101000003",
+    "sub_order_id": 3,
+    "channel": "wechat",
+    "amount": 159.50,
+    "status": "pending",
+    "callback_log": null,
+    "created_at": "2025-01-01 14:00:00",
+    "updated_at": "2025-01-01 14:00:00"
+  },
+  {
+    "id": 4,
+    "transaction_no": "TXN20250102000001",
+    "sub_order_id": 4,
+    "channel": "unionpay",
+    "amount": 12800.00,
+    "status": "success",
+    "callback_log": "{\"queryId\":\"UP20250102000001\",\"txnTime\":\"20250102093000\",\"txnAmt\":1280000}",
+    "created_at": "2025-01-02 09:29:00",
+    "updated_at": "2025-01-02 09:30:02"
+  },
+  {
+    "id": 5,
+    "transaction_no": "TXN20250102000002",
+    "sub_order_id": 2,
+    "channel": "alipay",
+    "amount": 89.00,
+    "status": "failed",
+    "callback_log": "{\"trade_no\":\"ALI20250102000005\",\"status\":\"TRADE_CLOSED\",\"msg\":\"买家余额不足\"}",
+    "created_at": "2025-01-02 12:30:00",
+    "updated_at": "2025-01-02 12:30:30"
+  }
+]

@@ -1,0 +1,37 @@
+[
+  {
+    "merchant_id": 1,
+    "date": "2025-01-15",
+    "diff": "-12.50",
+    "status": "pending",
+    "note": "系统比商家申报少12.50元，待核实"
+  },
+  {
+    "merchant_id": 1,
+    "date": "2025-01-16",
+    "diff": "0.00",
+    "status": "resolved",
+    "note": "对账一致，无差异"
+  },
+  {
+    "merchant_id": 1,
+    "date": "2025-01-14",
+    "diff": "0.50",
+    "status": "resolved",
+    "note": "系统多0.50元，已确认为手续费四舍五入误差"
+  },
+  {
+    "merchant_id": 2,
+    "date": "2025-01-15",
+    "diff": "85.00",
+    "status": "pending",
+    "note": "系统比商家申报多85.00元，疑似退款未同步"
+  },
+  {
+    "merchant_id": 2,
+    "date": "2025-01-14",
+    "diff": "-3.20",
+    "status": "ignored",
+    "note": "差异较小，已忽略"
+  }
+]

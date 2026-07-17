@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="80" viewBox="0 0 400 80">
+  <rect width="400" height="80" fill="#0E1017"/>
+  <rect x="40" y="8" width="320" height="64" rx="8" fill="#151720" stroke="#1C1F2B" stroke-width="1"/>
+  <text x="200" y="45" text-anchor="middle" fill="#F59E0B" font-size="5" font-family="sans-serif">♪ 音频占位</text>
+</svg>

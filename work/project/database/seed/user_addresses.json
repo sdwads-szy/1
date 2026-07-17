@@ -1,0 +1,42 @@
+[
+  {
+    "user_id": 1,
+    "province": "广东省",
+    "city": "深圳市",
+    "district": "南山区",
+    "detail": "科技园路1号创新大厦1208室",
+    "phone": "13800000001",
+    "contact_name": "小王",
+    "is_default": 1
+  },
+  {
+    "user_id": 2,
+    "province": "浙江省",
+    "city": "杭州市",
+    "district": "西湖区",
+    "detail": "文三路100号电商产业园A座301",
+    "phone": "13800000002",
+    "contact_name": "张三",
+    "is_default": 1
+  },
+  {
+    "user_id": 3,
+    "province": "北京市",
+    "city": "北京市",
+    "district": "朝阳区",
+    "detail": "建国路88号SOHO现代城B座1506",
+    "phone": "13800000003",
+    "contact_name": "李四",
+    "is_default": 1
+  },
+  {
+    "user_id": 4,
+    "province": "上海市",
+    "city": "上海市",
+    "district": "浦东新区",
+    "detail": "张江高科技园区博云路2号",
+    "phone": "13800000004",
+    "contact_name": "赵管理",
+    "is_default": 1
+  }
+]

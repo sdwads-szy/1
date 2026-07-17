@@ -1,0 +1,42 @@
+[
+  {
+    "id": 1,
+    "sub_order_id": 1,
+    "sku_id": 1,
+    "quantity": 1,
+    "price": "299.00",
+    "snapshot": "{\"spuName\":\"无线蓝牙耳机 Pro\",\"specName\":\"暗夜黑\",\"image\":\"/img/public/placeholder/product.svg\"}"
+  },
+  {
+    "id": 2,
+    "sub_order_id": 2,
+    "sku_id": 21,
+    "quantity": 2,
+    "price": "89.00",
+    "snapshot": "{\"spuName\":\"坚果大礼包 1.2kg\",\"specName\":\"混合坚果 1.2kg\",\"image\":\"/img/public/placeholder/product.svg\"}"
+  },
+  {
+    "id": 3,
+    "sub_order_id": 1,
+    "sku_id": 2,
+    "quantity": 1,
+    "price": "349.00",
+    "snapshot": "{\"spuName\":\"无线蓝牙耳机 Pro\",\"specName\":\"星光白\",\"image\":\"/img/public/placeholder/product.svg\"}"
+  },
+  {
+    "id": 4,
+    "sub_order_id": 3,
+    "sku_id": 11,
+    "quantity": 1,
+    "price": "1599.00",
+    "snapshot": "{\"spuName\":\"轻薄羽绒服 2025冬季新款\",\"specName\":\"黑色 L\",\"image\":\"/img/public/placeholder/product.svg\"}"
+  },
+  {
+    "id": 5,
+    "sub_order_id": 3,
+    "sku_id": 31,
+    "quantity": 1,
+    "price": "49.90",
+    "snapshot": "{\"spuName\":\"居家防滑棉拖鞋\",\"specName\":\"深灰 42-43\",\"image\":\"/img/public/placeholder/product.svg\"}"
+  }
+]

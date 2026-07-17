@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "merchant_id": 1,
+    "period": "2024-12",
+    "amount": "3200.50",
+    "status": "pending",
+    "paid_at": null,
+    "created_at": "2024-12-01 00:00:00",
+    "updated_at": "2024-12-01 00:00:00"
+  },
+  {
+    "id": 2,
+    "merchant_id": 2,
+    "period": "2024-12",
+    "amount": "2150.80",
+    "status": "pending",
+    "paid_at": null,
+    "created_at": "2024-12-01 00:00:00",
+    "updated_at": "2024-12-01 00:00:00"
+  }
+]

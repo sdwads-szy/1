@@ -1,0 +1,16 @@
+[
+  {"merchant_id": 1, "stat_date": "2025-01-09", "gmv": "5200.00", "order_count": 18},
+  {"merchant_id": 1, "stat_date": "2025-01-10", "gmv": "6800.50", "order_count": 22},
+  {"merchant_id": 1, "stat_date": "2025-01-11", "gmv": "4100.00", "order_count": 15},
+  {"merchant_id": 1, "stat_date": "2025-01-12", "gmv": "4900.00", "order_count": 17},
+  {"merchant_id": 1, "stat_date": "2025-01-13", "gmv": "8200.00", "order_count": 27},
+  {"merchant_id": 1, "stat_date": "2025-01-14", "gmv": "6100.00", "order_count": 21},
+  {"merchant_id": 1, "stat_date": "2025-01-15", "gmv": "7300.00", "order_count": 25},
+  {"merchant_id": 2, "stat_date": "2025-01-09", "gmv": "7380.00", "order_count": 27},
+  {"merchant_id": 2, "stat_date": "2025-01-10", "gmv": "8430.00", "order_count": 30},
+  {"merchant_id": 2, "stat_date": "2025-01-11", "gmv": "5770.00", "order_count": 23},
+  {"merchant_id": 2, "stat_date": "2025-01-12", "gmv": "6300.00", "order_count": 24},
+  {"merchant_id": 2, "stat_date": "2025-01-13", "gmv": "10750.00", "order_count": 36},
+  {"merchant_id": 2, "stat_date": "2025-01-14", "gmv": "8100.00", "order_count": 29},
+  {"merchant_id": 2, "stat_date": "2025-01-15", "gmv": "9500.00", "order_count": 32}
+]

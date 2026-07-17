@@ -1,0 +1,44 @@
+[
+  {
+    "admin_id": 4,
+    "action": "review_merchant",
+    "target_type": "merchant",
+    "target_id": 1,
+    "detail": "{\"before\":\"pending_review\",\"after\":\"approved\",\"reason\":\"资质齐全，予以通过\"}"
+  },
+  {
+    "admin_id": 4,
+    "action": "review_merchant",
+    "target_type": "merchant",
+    "target_id": 2,
+    "detail": "{\"before\":\"pending_review\",\"after\":\"approved\",\"reason\":\"资料审核无误\"}"
+  },
+  {
+    "admin_id": 4,
+    "action": "review_product",
+    "target_type": "product",
+    "target_id": 1,
+    "detail": "{\"before\":\"draft\",\"after\":\"approved\",\"reason\":\"商品信息合规，图片清晰\"}"
+  },
+  {
+    "admin_id": 4,
+    "action": "freeze_merchant",
+    "target_type": "merchant",
+    "target_id": 3,
+    "detail": "{\"before\":\"active\",\"after\":\"frozen\",\"reason\":\"多次违规投诉，暂时冻结\"}"
+  },
+  {
+    "admin_id": 4,
+    "action": "arbitrate_refund",
+    "target_type": "refund_request",
+    "target_id": 1,
+    "detail": "{\"before\":\"pending_arbitration\",\"after\":\"force_refund\",\"reason\":\"商家未在时效内处理，平台强制退款\"}"
+  },
+  {
+    "admin_id": 4,
+    "action": "settlement_pay",
+    "target_type": "settlement",
+    "target_id": 1,
+    "detail": "{\"before\":\"confirmed\",\"after\":\"paid\",\"reason\":\"T+7结算周期到，执行打款\"}"
+  }
+]

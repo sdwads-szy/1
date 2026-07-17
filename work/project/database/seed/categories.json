@@ -1,0 +1,14 @@
+[
+  {"id": 1,  "parent_id": null, "name": "手机数码", "level": 1, "sort": 1, "icon": "/img/public/placeholder/logo.svg", "created_at": "2025-01-01 00:00:00"},
+  {"id": 2,  "parent_id": null, "name": "电脑办公", "level": 1, "sort": 2, "icon": "/img/public/placeholder/logo.svg", "created_at": "2025-01-01 00:00:00"},
+  {"id": 3,  "parent_id": null, "name": "家用电器", "level": 1, "sort": 3, "icon": "/img/public/placeholder/logo.svg", "created_at": "2025-01-01 00:00:00"},
+  {"id": 4,  "parent_id": null, "name": "服饰鞋包", "level": 1, "sort": 4, "icon": "/img/public/placeholder/logo.svg", "created_at": "2025-01-01 00:00:00"},
+  {"id": 5,  "parent_id": null, "name": "美妆护肤", "level": 1, "sort": 5, "icon": "/img/public/placeholder/logo.svg", "created_at": "2025-01-01 00:00:00"},
+  {"id": 6,  "parent_id": null, "name": "食品饮料", "level": 1, "sort": 6, "icon": "/img/public/placeholder/logo.svg", "created_at": "2025-01-01 00:00:00"},
+  {"id": 7,  "parent_id": null, "name": "家居生活", "level": 1, "sort": 7, "icon": "/img/public/placeholder/logo.svg", "created_at": "2025-01-01 00:00:00"},
+  {"id": 8,  "parent_id": null, "name": "运动户外", "level": 1, "sort": 8, "icon": "/img/public/placeholder/logo.svg", "created_at": "2025-01-01 00:00:00"},
+  {"id": 9,  "parent_id": 1,    "name": "手机配件", "level": 2, "sort": 1, "icon": null, "created_at": "2025-01-01 00:00:00"},
+  {"id": 10, "parent_id": 1,    "name": "智能穿戴", "level": 2, "sort": 2, "icon": null, "created_at": "2025-01-01 00:00:00"},
+  {"id": 11, "parent_id": 6,    "name": "休闲零食", "level": 2, "sort": 1, "icon": null, "created_at": "2025-01-01 00:00:00"},
+  {"id": 12, "parent_id": 7,    "name": "收纳整理", "level": 2, "sort": 1, "icon": null, "created_at": "2025-01-01 00:00:00"}
+]

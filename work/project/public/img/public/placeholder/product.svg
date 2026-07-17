@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+  <rect width="400" height="300" fill="#0E1017"/>
+  <rect x="40" y="30" width="320" height="240" rx="8" fill="#151720" stroke="#1C1F2B" stroke-width="1"/>
+  <text x="200" y="155" text-anchor="middle" fill="#555B66" font-size="20" font-family="sans-serif">商品图片</text>
+</svg>

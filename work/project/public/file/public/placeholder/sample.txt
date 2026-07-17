@@ -1,0 +1,5 @@
+这是一个占位文本文件。
+实际内容由人工替换。
+
+This is a placeholder text file.
+Replace with real content.

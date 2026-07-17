@@ -1,0 +1,16 @@
+[
+  {
+    "merchant_id": 1,
+    "balance": "8500.00",
+    "frozen_balance": "0.00",
+    "total_earned": "12000.00",
+    "version": 0
+  },
+  {
+    "merchant_id": 2,
+    "balance": "6200.00",
+    "frozen_balance": "0.00",
+    "total_earned": "9800.00",
+    "version": 0
+  }
+]

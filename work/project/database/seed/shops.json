@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "merchant_id": 1,
+    "name": "张三数码旗舰店",
+    "logo": "/img/public/placeholder/logo.svg",
+    "banner": "/img/public/placeholder/banner.svg",
+    "description": "专营数码配件与智能设备，品质保证",
+    "status": "open"
+  },
+  {
+    "id": 2,
+    "merchant_id": 2,
+    "name": "李四品质生活馆",
+    "logo": "/img/public/placeholder/logo.svg",
+    "banner": "/img/public/placeholder/banner.svg",
+    "description": "精选家居好物与食品饮料，用心服务",
+    "status": "open"
+  }
+]

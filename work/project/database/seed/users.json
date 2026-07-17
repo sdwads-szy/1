@@ -1,0 +1,38 @@
+[
+  {
+    "id": 1,
+    "mobile": "13800000001",
+    "password_hash": "{{bcrypt:123456}}",
+    "nickname": "测试买家小王",
+    "avatar": "/img/public/placeholder/avatar.svg",
+    "role": "user",
+    "status": "active"
+  },
+  {
+    "mobile": "13800000002",
+    "id": 2,
+    "password_hash": "{{bcrypt:123456}}",
+    "nickname": "测试商家张三",
+    "avatar": "/img/public/placeholder/avatar.svg",
+    "role": "merchant",
+    "status": "active"
+  },
+  {
+    "mobile": "13800000003",
+    "password_hash": "{{bcrypt:123456}}",
+    "id": 3,
+    "nickname": "测试商家李四",
+    "avatar": "/img/public/placeholder/avatar.svg",
+    "role": "merchant",
+    "status": "active"
+  },
+  {
+    "mobile": "13800000004",
+    "password_hash": "{{bcrypt:123456}}",
+    "id": 4,
+    "nickname": "平台管理员",
+    "avatar": "/img/public/placeholder/avatar.svg",
+    "role": "admin",
+    "status": "active"
+  }
+]

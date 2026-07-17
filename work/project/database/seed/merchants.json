@@ -1,0 +1,41 @@
+[
+  {
+    "id": 1,
+    "user_id": 2,
+    "credit_code": "91330100MA2ABCD123",
+    "biz_license": "/img/public/placeholder/document.svg",
+    "contact_name": "张三",
+    "contact_mobile": "13800000002",
+    "status": "approved",
+    "review_reason": "资质齐全，予以通过",
+    "reviewed_at": "2025-01-10 10:00:00",
+    "created_at": "2025-01-08 09:00:00",
+    "updated_at": "2025-01-10 10:00:00"
+  },
+  {
+    "id": 2,
+    "user_id": 3,
+    "credit_code": "91110108MA2EFGH456",
+    "biz_license": "/img/public/placeholder/document.svg",
+    "contact_name": "李四",
+    "contact_mobile": "13800000003",
+    "status": "approved",
+    "review_reason": "审核通过，欢迎入驻",
+    "reviewed_at": "2025-01-12 14:30:00",
+    "created_at": "2025-01-10 11:00:00",
+    "updated_at": "2025-01-12 14:30:00"
+  },
+  {
+    "id": 3,
+    "user_id": 4,
+    "credit_code": "91440300MA3IJKL789",
+    "biz_license": "/img/public/placeholder/document.svg",
+    "contact_name": "王五",
+    "contact_mobile": "13800000004",
+    "status": "pending_review",
+    "review_reason": null,
+    "reviewed_at": null,
+    "created_at": "2025-01-15 08:30:00",
+    "updated_at": "2025-01-15 08:30:00"
+  }
+]
